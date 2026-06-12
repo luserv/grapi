@@ -1,0 +1,55 @@
+# ── Sesiones de Instagram (credenciales) ─────────────────────────────
+session.json
+session_*.json
+backend/sessions/
+
+# ── Descargas locales (galería, historias, índices) ───────────────────
+backend/downloads/
+
+# ── Resultados exportados ─────────────────────────────────────────────
+*.txt
+*.csv
+
+# ── Python ────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# ── Variables de entorno ──────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Node / Next.js ────────────────────────────────────────────────────
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/dist/
+frontend/out/
+
+# ── Base de datos local ───────────────────────────────────────────────
+*.db
+*.sqlite3
+pgdata/
+
+# ── Claude Code ───────────────────────────────────────────────────────
+.claude/settings.local.json
+
+# ── Sistema operativo / IDEs ──────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+
+./.claude/

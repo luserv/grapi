@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+*.so
+session_*.json
+session.json
+sessions/
+downloads/
+.env

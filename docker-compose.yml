@@ -1,0 +1,85 @@
+services:
+  # ── Base de datos (caché de perfiles) ──────────────────────────────
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-iguser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-igpass}
+      POSTGRES_DB: ${POSTGRES_DB:-igdb}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-iguser} -d ${POSTGRES_DB:-igdb}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Backend (FastAPI) ───────────────────────────────────────────────
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-iguser}:${POSTGRES_PASSWORD:-igpass}@db:5432/${POSTGRES_DB:-igdb}
+      CACHE_TTL_DAYS: "${CACHE_TTL_DAYS:-7}"
+      GALLERY_TTL_HOURS: "${GALLERY_TTL_HOURS:-24}"
+      DOWNLOADS_DIR: /data/downloads
+      SESSIONS_DIR: /data/sessions
+    command: sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./backend/downloads:/data/downloads
+      - ./backend/sessions:/data/sessions
+    develop:
+      watch:
+        - action: sync
+          path: ./backend
+          target: /app
+          ignore:
+            - __pycache__/
+            - "*.pyc"
+            - downloads/
+            - sessions/
+            - env/
+            - .venv/
+        - action: rebuild
+          path: ./backend/requirements.txt
+
+  # ── Frontend (Next.js dev server) ─────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      target: build
+    command: npm run dev -- -p 3000
+    environment:
+      NODE_ENV: development
+    ports:
+      - "5174:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend/app:/app/app
+      - ./frontend/components:/app/components
+      - ./frontend/lib:/app/lib
+      - ./frontend/src:/app/src
+    develop:
+      watch:
+        - action: sync
+          path: ./frontend/app
+          target: /app/app
+        - action: sync
+          path: ./frontend/components
+          target: /app/components
+        - action: sync
+          path: ./frontend/lib
+          target: /app/lib
+        - action: rebuild
+          path: ./frontend/package.json
+
+volumes:
+  pgdata:
