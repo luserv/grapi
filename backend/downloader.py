@@ -92,12 +92,20 @@ def _download_file(cl, url, filepath, retries=3):
             time.sleep(random.uniform(3, 6))
 
 
-def _existing_pks(metadata):
+def _existing_pks(metadata, username):
+    """PKs cuyo archivo está efectivamente en disco.
+    Excluye descargas fallidas (filename=None) y archivos borrados manualmente."""
+    gallery_dir = _user_dir(username) / "gallery"
+    stories_dir = _user_dir(username) / "stories"
     pks = set()
     for item in metadata.get("gallery", []):
-        pks.add(item["pk"])
+        fname = item.get("filename")
+        if fname and (gallery_dir / fname).exists():
+            pks.add(item["pk"])
     for item in metadata.get("stories", []):
-        pks.add(item["pk"])
+        fname = item.get("filename")
+        if fname and (stories_dir / fname).exists():
+            pks.add(item["pk"])
     return pks
 
 
@@ -159,7 +167,7 @@ def download_user(cl, username, user_id=None, on_progress: Callable = None, shou
                 time.sleep(random.uniform(30, 45))
 
     metadata["user_pk"] = user_id
-    seen = _existing_pks(metadata)
+    seen = _existing_pks(metadata, username)
     new_items = {"gallery": 0, "stories": 0}
 
     # ── Galería ──
@@ -174,8 +182,17 @@ def download_user(cl, username, user_id=None, on_progress: Callable = None, shou
     for idx, m in enumerate(medias, 1):
         if _cancelled(should_cancel):
             break
+        _emit(on_progress, {"type": "download", "current": idx, "total": total, "section": "gallery"})
         if m.pk in seen:
             continue
+
+        # Limpiar entradas fallidas/borradas de este PK antes de re-bajar
+        metadata["gallery"] = [
+            e for e in metadata["gallery"]
+            if not (e["pk"] == m.pk and (
+                not e.get("filename") or not (gallery_dir / e["filename"]).exists()
+            ))
+        ]
 
         items_to_dl = []
 
@@ -186,16 +203,15 @@ def download_user(cl, username, user_id=None, on_progress: Callable = None, shou
                     continue
                 ext_r = "mp4" if r.media_type == 2 or ".mp4" in url else "jpg"
                 filename = _safe_filename(m.taken_at, f"{m.pk}_{i}", ext_r)
-                items_to_dl.append((url, filename, r.media_type, False))
+                items_to_dl.append((url, filename, r.media_type))
         else:
             url = str(m.video_url or m.thumbnail_url or "")
             if not url:
                 continue
             filename = _safe_filename(m.taken_at, m.pk, _ext_from_media(m))
-            items_to_dl.append((url, filename, m.media_type, False))
+            items_to_dl.append((url, filename, m.media_type))
 
-        for url, filename, media_type, _ in items_to_dl:
-            _emit(on_progress, {"type": "download", "current": idx, "total": total, "filename": filename, "section": "gallery"})
+        for url, filename, media_type in items_to_dl:
             downloaded = False
             try:
                 _download_file(cl, url, gallery_dir / filename)
@@ -221,10 +237,13 @@ def download_user(cl, username, user_id=None, on_progress: Callable = None, shou
 
     _emit(on_progress, {"type": "phase", "label": "Descargando historias..."})
     stories_dir = _media_dir(username, "stories")
+    # story_sources: (pk, taken_at, url, filename, media_type, highlight_title)
     story_sources = []
 
+    # user_stories_v1 usa solo la API privada móvil. No usamos user_stories() porque
+    # su fallback a la GraphQL pública dispara el "scraping_warning" de Instagram.
     try:
-        stories = cl.user_stories(user_id)
+        stories = cl.user_stories_v1(user_id)
         for s in stories:
             if s.pk in seen:
                 continue
@@ -233,18 +252,21 @@ def download_user(cl, username, user_id=None, on_progress: Callable = None, shou
                 continue
             ext = "mp4" if s.media_type == 2 or ".mp4" in url else "jpg"
             filename = _safe_filename(s.taken_at, s.pk, ext)
-            story_sources.append((url, filename, s.media_type, None))
+            story_sources.append((int(s.pk), s.taken_at, url, filename, s.media_type, None))
     except Exception as e:
         _emit(on_progress, {"type": "error", "msg": f"Error al obtener stories activas: {e}"})
 
+    # highlight_info_v1 usa feed/reels_media/ (API privada). No llamamos a
+    # highlight_stories() porque no existe en esta versión de instagrapi.
     try:
-        highlights = cl.user_highlights(user_id)
+        highlights = cl.user_highlights_v1(user_id)
         for h in highlights:
             try:
-                highlight_stories = cl.highlight_stories(h.id)
-            except Exception:
+                h_full = cl.highlight_info_v1(h.pk)
+            except Exception as e:
+                _emit(on_progress, {"type": "error", "msg": f"Error al obtener highlight '{h.title}': {e}"})
                 continue
-            for s in highlight_stories:
+            for s in h_full.items:
                 if s.pk in seen:
                     continue
                 url = str(s.video_url or s.thumbnail_url or "")
@@ -252,17 +274,26 @@ def download_user(cl, username, user_id=None, on_progress: Callable = None, shou
                     continue
                 ext = "mp4" if s.media_type == 2 or ".mp4" in url else "jpg"
                 filename = _safe_filename(s.taken_at, s.pk, ext)
-                story_sources.append((url, filename, s.media_type, h.title))
+                story_sources.append((int(s.pk), s.taken_at, url, filename, s.media_type, h.title))
     except Exception as e:
         _emit(on_progress, {"type": "error", "msg": f"Error al obtener highlights: {e}"})
 
     total_stories = len(story_sources)
     _emit(on_progress, {"type": "total", "total": total_stories, "section": "stories"})
 
-    for idx, (url, filename, media_type, highlight_title) in enumerate(story_sources, 1):
+    for idx, (story_pk, taken_at, url, filename, media_type, highlight_title) in enumerate(story_sources, 1):
         if _cancelled(should_cancel):
             break
         _emit(on_progress, {"type": "download", "current": idx, "total": total_stories, "filename": filename, "section": "stories"})
+
+        # Limpiar entradas fallidas/borradas de este PK antes de re-bajar
+        metadata["stories"] = [
+            e for e in metadata["stories"]
+            if not (e["pk"] == story_pk and (
+                not e.get("filename") or not (stories_dir / e["filename"]).exists()
+            ))
+        ]
+
         downloaded = False
         try:
             _download_file(cl, url, stories_dir / filename)
@@ -271,9 +302,9 @@ def download_user(cl, username, user_id=None, on_progress: Callable = None, shou
         except Exception as e:
             _emit(on_progress, {"type": "error", "msg": f"No se pudo bajar {filename}: {e}"})
         entry = {
-            "pk": int(filename.split("_")[1].split(".")[0].split("_")[0]),
+            "pk": story_pk,
             "filename": filename if downloaded else None,
-            "taken_at": filename[:10] + "T" + filename[11:19],
+            "taken_at": taken_at.isoformat() if hasattr(taken_at, "isoformat") else str(taken_at),
             "media_type": media_type,
             "thumbnail_url": url,
         }

@@ -4,12 +4,14 @@ import { fetchDownloadsAPI, type User } from "@/lib/api"
 
 interface BulkState {
   running: boolean; idx: number; total: number; current: string; detail: string
+  fileSection: string; fileCurrent: number; fileTotal: number
   done: { downloaded: number; skipped: number; failed: number; cancelled: boolean } | null
   error: string; cancelling: boolean
 }
 
 interface Props {
   allResults: User[]
+  isSearching: boolean
   sessionId: string | null
   filters: { pub: boolean; priv: boolean; ver: boolean; kw: string; minFol: number }
   filtered: User[]
@@ -55,7 +57,7 @@ function fmtDuration(secs: number) {
 }
 
 export default function ResultsCard({
-  allResults, sessionId, filters, filtered, sortCol, setFilter, toggleSort, applyFilters,
+  allResults, isSearching, sessionId, filters, filtered, sortCol, setFilter, toggleSort, applyFilters,
   resultsStack, bulk, downloadStatus, downloadLabel,
   onAnalizar, onGoBack, onExportCsv, onDownload, onStopDownload,
   onStartBulk, onCancelBulk, onClearBulkDone,
@@ -160,16 +162,27 @@ export default function ResultsCard({
           {bulk.running && (
             <>
               <div className="flex items-center gap-[0.55rem] text-[0.82rem] flex-wrap">
-                <span className="num font-semibold text-accent">{bulk.idx}/{bulk.total}</span>
-                {bulk.current && <span className="user-link">@{bulk.current}</span>}
-                <span className="text-dim font-mono text-[0.76rem]">{bulk.detail}</span>
-                <button className="btn-icon" disabled={bulk.cancelling} onClick={onCancelBulk}
+                <span className="num font-semibold text-accent tabular-nums">{bulk.idx}/{bulk.total}</span>
+                {bulk.current && <span className="user-link font-semibold">@{bulk.current}</span>}
+                {bulk.fileTotal > 0 && bulk.fileCurrent > 0
+                  ? <span className="font-mono text-[0.76rem] text-ink">
+                      {bulk.fileSection === "gallery" ? "Galería" : "Historias"} {bulk.fileCurrent}/{bulk.fileTotal}
+                    </span>
+                  : bulk.detail && <span className="font-mono text-[0.76rem] text-dim">{bulk.detail}</span>
+                }
+                <button className="btn-icon ml-auto" disabled={bulk.cancelling} onClick={onCancelBulk}
                   aria-label="Cancelar descarga masiva"
                   title={bulk.cancelling ? "Cancelando…" : "Cancelar (guarda lo ya bajado)"}>×</button>
               </div>
+              {/* Barra de usuarios */}
               <div className="mt-[0.45rem] h-1 bg-surface-2 rounded-sm overflow-hidden">
                 <div className="h-full bg-accent transition-[width] duration-300"
                   style={{ width: bulk.total ? `${bulk.idx / bulk.total * 100}%` : "0%" }} />
+              </div>
+              {/* Barra de archivos del usuario actual */}
+              <div className="mt-[0.25rem] h-[3px] bg-surface-2 rounded-sm overflow-hidden">
+                <div className="h-full bg-accent/50 transition-[width] duration-150"
+                  style={{ width: bulk.fileTotal ? `${bulk.fileCurrent / bulk.fileTotal * 100}%` : "0%" }} />
               </div>
             </>
           )}
@@ -225,7 +238,11 @@ export default function ResultsCard({
           <tbody>
             {filtered.length === 0 && (
               <tr><td colSpan={9} className="empty">
-                {allResults.length > 0 ? "Sin resultados con los filtros activos." : ""}
+                {isSearching
+                  ? "Consultando Instagram, esperá…"
+                  : allResults.length > 0
+                    ? "Sin resultados con los filtros activos."
+                    : ""}
               </td></tr>
             )}
             {filtered.map((u, i) => {

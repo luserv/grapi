@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Instagram follower/following analyzer with two interfaces:
 - **CLI** (`main.py`) — interactive terminal script
-- **Web app** (`backend/` FastAPI + `frontend/` Vue 3 SPA)
+- **Web app** (`backend/` FastAPI + `frontend/` Next.js SPA)
 
 Written in Spanish (variable names, prompts, comments, docs). There are no tests.
 
@@ -26,16 +26,16 @@ python main.py                       # prompts for username/password
 cp .env.example .env                 # compose reads it for ${VAR} substitution
 docker compose up --build            # db + backend + frontend + pgadmin
 ```
-Brings up **four containers**, frontend served by nginx on **http://localhost:5173**:
+Brings up **four containers**, frontend served by Next.js on **http://localhost:5174**:
 
 | Service    | Port        | Role |
 |------------|-------------|------|
-| `frontend` | 5173 → 80   | Vue build served by nginx; proxies `/api/*` → `backend:8000` (SSE-aware: `proxy_buffering off`, long read timeout) |
+| `frontend` | 5174 → 3000 | Next.js 15 dev server (Turbopack); proxies `/api/*` → `backend:8000` via `next.config.mjs` rewrites |
 | `backend`  | 8000        | FastAPI; entrypoint runs `alembic upgrade head` then uvicorn |
 | `db`       | 5432        | Postgres 16 (cache + history); backend waits on its `healthcheck` |
 | `pgadmin`  | 8080        | DB inspection UI (pgAdmin 4; conexión pre-cargada vía `pgadmin/servers.json`) |
 
-The frontend always uses **same-origin** relative paths (`fetch('/api/...')`) — no API base-URL constant. In Docker nginx does the `/api` proxy; in local dev Vite's `server.proxy` (`vite.config.js`) does. **Persistence via bind-mounts** (visible on the host): `./backend/downloads` (galleries/stories), `./backend/sessions` (`session_<user>.json`), plus the `pgdata` named volume for Postgres. Paths inside the container come from env: `DOWNLOADS_DIR=/data/downloads`, `SESSIONS_DIR=/data/sessions`.
+The frontend always uses **same-origin** relative paths (`fetch('/api/...')`) — no API base-URL constant. In Docker Next.js rewrites do the `/api` proxy; in local dev the same rewrites point to `BACKEND_URL` env (default `http://localhost:8000`). **Persistence via bind-mounts** (visible on the host): `./backend/downloads` (galleries/stories), `./backend/sessions` (`session_<user>.json`), plus the `pgdata` named volume for Postgres. Paths inside the container come from env: `DOWNLOADS_DIR=/data/downloads`, `SESSIONS_DIR=/data/sessions`.
 
 ### Web app — local dev without Docker (hot reload)
 ```bash
@@ -45,14 +45,11 @@ pip install -r requirements.txt      # uses the venv; NOT needed in the Docker p
 alembic upgrade head                 # create/upgrade tables (re-run after model changes)
 uvicorn main:app --reload            # reads DATABASE_URL from .env (localhost host)
 
-cd frontend && npm install && npm run dev   # Vite dev server on :5173, proxies /api → :8000
+cd frontend && npm install && npm run dev   # Next.js dev server on :5174 with Turbopack
 ```
 Postgres is **optional at runtime**: if it's unreachable, the stream endpoint degrades to no-cache/no-history instead of failing. The CLI (`main.py`) does not use the DB at all.
 
 > **Warning**: `uvicorn --reload` restarts the server on every file save, which **wipes all in-memory sessions** — you must re-login after each backend file edit.
-
-### Note: backend can also serve the SPA itself (single-origin, non-Docker)
-`backend/main.py` still mounts `frontend/dist` at `/` via `StaticFiles` **only if that directory exists** (conditional mount). So `cd frontend && npm run build` then `uvicorn main:app` serves everything on `:8000` without nginx. The Docker setup does **not** use this path — nginx serves the build instead — but the mount is harmless when `dist` isn't present.
 
 ### Monitoring bulk download jobs from the terminal
 `backend/jobs_cli.py` is a stdlib-only CLI that queries the backend over HTTP:
@@ -86,29 +83,30 @@ Sync (not async) on purpose: the instagrapi fetch is blocking and runs in a `Thr
 - `models.py` — `InstagramUser` (profile cache), `AnalysisRun` (one snapshot/run), `RunMember` (which users were in a run, with follower counts **frozen at run time** for history diffs).
 - `repository.py` — all SQL lives here: `get_cached_user` / `upsert_user` / `user_to_dict`, and `create_run` / `add_member` / `finalize_run` / `list_runs` / `get_run` / `diff_runs`.
 - `alembic/` — migrations. `alembic/env.py` pulls `Base.metadata` and `settings.DATABASE_URL` (the `.ini` URL is overridden in code). After editing `models.py`: `alembic revision --autogenerate -m "..."` then `alembic upgrade head`.
-- `main.py` — FastAPI app with all API endpoints. Key groups: auth (`/api/login`, `/api/logout`, `/api/session`), analysis stream (`/api/seguidores/stream`), posts/media proxy (`/api/posts`, `/api/download`, `/api/proxy-image`), single-user download SSE (`/api/download-user/stream`), bulk download jobs (`/api/download-all`, `/api/download-all/stream`, `/api/download-all/cancel`), downloads browser (`/api/downloads`), history (`/api/history/runs`, `/api/history/diff`).
+- `main.py` — FastAPI app with all API endpoints. Key groups: auth (`/api/login`, `/api/logout`, `/api/sessions`), analysis stream (`/api/seguidores/stream`), posts/media proxy (`/api/posts`, `/api/download`, `/api/proxy-image`), single-user download SSE (`/api/download-user/stream`), bulk download jobs (`/api/download-all`, `/api/download-all/stream`, `/api/download-all/status`, `/api/download-all/cancel`), downloads browser (`/api/downloads`), history (`/api/history/runs`, `/api/history/runs/<id>`, `/api/history/diff`, `/api/history/users`).
 
 **Session management**: `Client` objects live in memory in `sessions: dict[str, Client]`, keyed by a UUID `session_id` from login. Lost on server restart. Each Instagram user also gets a persistent `<SESSIONS_DIR>/session_<username>.json` (default `backend/`; `/data/sessions` in Docker, bind-mounted to `./backend/sessions`).
 
 **Bulk jobs**: `bulk_jobs: dict[job_id, {state, cancel, subscribers}]` is in-memory — survives tab close, lost on server restart. `POST /api/download-all` returns immediately with `{job_id, total}`; `GET /api/download-all/stream?job_id=` streams events with a `snapshot` first (enabling reconnects). Multiple SSE subscribers per job are OK. Jobs pruned to last 10 finished.
 
-**Progress streaming**: the blocking instagrapi fetch runs in a `ThreadPoolExecutor` (max 4 workers); progress events cross back to the async loop via `loop.call_soon_threadsafe(queue.put_nowait, event)`. Actual emitted event types from `obtener_usuarios` are `total`, `usuario`, `error`, `done`, plus `fatal_error` from `main.py` on an unhandled exception. (Note: the `seguidores_stream` docstring lists `progress`/`match`, but the code emits `usuario` — trust the code.)
+**Progress streaming**: the blocking instagrapi fetch runs in a `ThreadPoolExecutor` (max 4 workers); progress events cross back to the async loop via `loop.call_soon_threadsafe(queue.put_nowait, event)`. Actual emitted event types from `obtener_usuarios` are `total`, `usuario`, `error`, `done`, plus `fatal_error` from `main.py` on an unhandled exception.
 
 ### Web app — frontend (`frontend/`)
-Vue 3 SPA built with Vite, styled with **Tailwind CSS v4** (via `@tailwindcss/vite`). The **active** code is in `src/`:
-- `src/main.js` → mounts `App.vue` and imports `styles.css`.
-- `src/styles.css` — the **only** stylesheet: `@import "tailwindcss"` + an `@theme` block mapping the OKLCH design tokens (so utilities like `bg-surface`/`text-faint`/`border-edge-soft`/`font-mono` exist) + custom max-width breakpoints (`xs`=480px, `xxs`=360px; used as `max-xs:`/`max-xxs:`) + a minimal `@layer base` (body layout, `h1` mark, inputs/buttons, focus, reduced-motion) + a `@layer components` of design-system atoms (`.card`/`.card-wide`/`.results-card`, `.btn-primary`/`.btn-secondary`/`.btn-sm`/`.btn-analizar`/`.btn-posts`/`.btn-icon`, `.field-label`, `.toggle`, `.chip`, `.filter-input`, table `th`/`td`/`.num`, `.badge`/`.user-link`/`.empty`, `.tab`, `.diff-*`). Layout/one-offs use utilities directly in the templates; components have **no `<style>` blocks**. **Mobile-first**: base styles target the smallest screen and scale up with min-width variants (`xxs:`≥360, `xs:`≥480, `sm:`≥640). Responsive table column hiding is per-cell (`hidden xs:table-cell` / `hidden sm:table-cell`), not `:nth-child`. Inputs are ≥16px on mobile (`text-base`) to avoid iOS focus-zoom.
-- `src/api.js` — all fetch wrappers + SSE/download URL builders, incl. the bulk-download helpers (`startDownloadAllJob`, `subscribeBulkStream`, `fetchBulkJobs`, `fetchBulkStatus`, `cancelDownloadAll`, `checkSessionAPI`).
-- `src/components/` — `LoginCard`, `SearchCard`, `ResultsCard`, `HistoryCard`, `DownloadsCard`.
-- `src/composables/` — `useAuth`, `useSearch`, `useTable`, and `useBulkDownload` (state + logic).
-- `App.vue` has a `view` ref toggling three tabs: `downloads` (`DownloadsCard`), `search` (SearchCard + ResultsCard) and `history` (`HistoryCard`). `HistoryCard` reads `/api/history/*`: lists runs, lets you select two to `diff` (gained/lost usernames), and expands a run's members. Numeric columns use the shared `.num` component class (Fira Code, tabular-nums).
-- **Bulk download is app-level state**: `useBulkDownload` is instantiated in `App.vue` and `provide`d (so it survives view switches); `ResultsCard` injects it via `inject('bulkDl')`. The active `job_id` is kept in `localStorage`; `App.vue`'s `onMounted` calls `bulkDl.resume()` to re-subscribe to an in-flight job after a reload. Consumes the stream with `fetch`+reader (not `EventSource`) for manual reconnect control.
+Next.js 15 SPA (App Router, Turbopack, `"use client"`), TypeScript, styled with **Tailwind CSS v4** (via `@tailwindcss/postcss`). The active code:
+- `app/layout.tsx` — root layout (`<html lang="es">`, imports `globals.css`).
+- `app/page.tsx` — main SPA page (`"use client"`), a single component with `view` state toggling three screens: `downloads`, `search`, `history`. Owns per-user download stream logic, login/logout, CSV export, tab navigation, and session switcher.
+- `app/globals.css` — the **only** stylesheet: `@import "tailwindcss"` + an `@theme` block mapping the OKLCH design tokens (so utilities like `bg-surface`/`text-faint`/`border-edge-soft`/`font-mono` exist) + custom max-width breakpoints (`xs`=480px, `xxs`=360px; used as `max-xs:`/`max-xxs:`) + a minimal `@layer base` (body layout, `h1` mark, inputs/buttons, focus, reduced-motion) + a `@layer components` of design-system atoms (`.card`/`.card-wide`/`.results-card`, `.btn-primary`/`.btn-secondary`/`.btn-sm`/`.btn-analizar`/`.btn-posts`/`.btn-icon`, `.field-label`, `.toggle`, `.chip`, `.filter-input`, table `th`/`td`/`.num`, `.badge`/`.user-link`/`.empty`, `.tab`, `.diff-*`). Layout/one-offs use utilities directly in the templates; components have **no `<style>` blocks**. **Mobile-first**: base styles target the smallest screen and scale up with min-width variants (`xxs:`≥360, `xs:`≥480, `sm:`≥640). Responsive table column hiding is per-cell (`hidden xs:table-cell` / `hidden sm:table-cell`), not `:nth-child`. Inputs are ≥16px on mobile (`text-base`) to avoid iOS focus-zoom.
+- `lib/api.ts` — all fetch wrappers + SSE/download URL builders, typed with exported interfaces (`User`, `DownloadEntry`, `MediaItem`, `Run`, `SessionEntry`). Includes bulk-download helpers (`startDownloadAllJob`, `subscribeBulkStream`, `fetchBulkStatus`, `cancelDownloadAll`, `checkSessionAPI`).
+- `lib/hooks.ts` — four custom hooks (analogous to Vue composables):
+  - `useAuth` — session list management, login/logout/switchTo, 2FA handling
+  - `useSearch` — SSE stream consumption, results accumulation, stack-based navigation for drilling into target users, cached results loading
+  - `useTable` — client-side filtering (public/private/verified/min-followers/keyword), sorting by column
+  - `useBulkDownload` — download job lifecycle (start/subscribe/resume/cancel), localStorage persistence for reconnection
+- `components/` — `LoginCard`, `SearchCard`, `ResultsCard`, `HistoryCard`, `DownloadsCard`. Pure presentational; all state lives in `page.tsx` or `hooks.ts`.
 
-**Dead code — do not edit**:
-- `frontend/app/` — earlier vanilla-JS modular version that predates the Vue rewrite. Not referenced by `index.html` or any build.
-- `frontend/styles.css` — root-level stylesheet superseded by `frontend/src/styles.css`.
+Frontend features: choose following vs followers, analyze your own or another `target_username`, live progress bar, client-side filters, sortable table, CSV export, session switcher (multi-account), and per-user gallery/stories download with progress. Bulk download is app-level state via `useBulkDownload` (the active `job_id` is kept in `localStorage`; `resume()` re-subscribes to an in-flight job after reload). Consumes the stream with `fetch`+reader (not `EventSource`) for manual reconnect control.
 
-Frontend features: choose following vs followers, analyze your own or another `target_username`, live progress bar, client-side filters (public/private/verified/min-followers/keyword over bio+name+username), sortable table, CSV export, and a posts gallery modal.
+- `lib/` — dead code, do not edit: any leftover `src/` directory in `frontend/` from the Vue era.
 
 ## Design System & UI Principles
 
@@ -127,7 +125,7 @@ From `PRODUCT.md` — these guide all UI/frontend work:
 
 ## Subagents
 
-`backend/.claude/agents/responsive-scalable-builder.md` — an agent specialized in responsive Vue 3 UI + scalable code architecture for this project. Invoke it when making significant frontend layout or multi-layer refactoring changes.
+`backend/.claude/agents/responsive-scalable-builder.md` — an agent specialized in responsive React/Next.js UI + scalable code architecture for this project. Invoke it when making significant frontend layout or multi-layer refactoring changes.
 
 ## Key Constraints
 

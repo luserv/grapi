@@ -178,9 +178,10 @@ export default function App() {
             onLogout={() => handleLogout()}
             onClearTarget={() => search.setTarget(null)}
           />
-          {search.allResults.length > 0 && (
+          {(search.allResults.length > 0 || search.isSearching) && (
             <ResultsCard
               allResults={search.allResults}
+              isSearching={search.isSearching}
               sessionId={auth.sessionId}
               filters={table.filters}
               filtered={table.filtered}

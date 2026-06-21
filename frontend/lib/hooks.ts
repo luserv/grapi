@@ -1,5 +1,5 @@
 "use client"
-import { useState, useRef, useCallback, useMemo, useEffect } from "react"
+import { useState, useRef, useMemo, useEffect } from "react"
 import type { User } from "./api"
 import {
   loginAPI, logoutAPI, buildStreamURL,
@@ -106,15 +106,17 @@ export function useSearch() {
   const [progressIdx, setProgressIdx]     = useState(0)
   const [progressTotal, setProgressTotal] = useState(0)
   const [resultsSource, setResultsSource] = useState<"cache" | "search" | null>(null)
-  const activeES = useRef<EventSource | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
-  // Keep mutable refs so closures inside EventSource callbacks see fresh values
+  // Keep mutable refs so closures inside callbacks see fresh values
   const currentTargetRef = useRef(currentTarget)
   useEffect(() => { currentTargetRef.current = currentTarget }, [currentTarget])
   const allResultsRef = useRef(allResults)
   useEffect(() => { allResultsRef.current = allResults }, [allResults])
   const resultsStackRef = useRef(resultsStack)
   useEffect(() => { resultsStackRef.current = resultsStack }, [resultsStack])
+
+  useEffect(() => () => abortRef.current?.abort(), [])
 
   const progressPct = useMemo(
     () => progressTotal > 0 ? Math.round(progressIdx / progressTotal * 100) : 0,
@@ -132,7 +134,7 @@ export function useSearch() {
   }
 
   function stopSearch(statusMsg?: string) {
-    if (activeES.current) { activeES.current.close(); activeES.current = null }
+    if (abortRef.current) { abortRef.current.abort(); abortRef.current = null }
     setIsSearching(false)
     setStatus(statusMsg ?? "")
     setProgressIdx(0)
@@ -157,49 +159,63 @@ export function useSearch() {
     setStatus(`Conectando con Instagram... (${destino})`)
     setIsSearching(true)
 
-    if (activeES.current) activeES.current.close()
-    const es = new EventSource(buildStreamURL(sessionId, modo, target))
-    activeES.current = es
+    abortRef.current?.abort()
+    const ac = new AbortController()
+    abortRef.current = ac
 
-    es.onmessage = (e) => {
-      const ev = JSON.parse(e.data)
-      switch (ev.type) {
-        case "total":
-          setStatus(`${ev.total.toLocaleString()} ${label} de ${destino}. Analizando...`)
-          setProgressTotal(ev.total)
-          break
-        case "usuario":
-          setAllResults(prev => [...prev, ev.usuario])
-          setProgressIdx(ev.idx)
-          setProgressTotal(ev.total)
-          break
-        case "error":
-          setStatus(`⚠ Error usuario ${ev.idx}: ${ev.msg}`)
-          break
-        case "done":
-          setStatus(`Completado. ${ev.total.toLocaleString()} ${label} cargados.`)
-          setProgressIdx(ev.total)
-          setProgressTotal(ev.total)
-          setIsSearching(false)
-          activeES.current = null
-          es.close()
-          break
-        case "fatal_error":
-          setStatus(`Error: ${ev.msg}`)
-          setIsSearching(false)
-          activeES.current = null
-          es.close()
-          break
+    ;(async () => {
+      try {
+        const res = await fetch(buildStreamURL(sessionId, modo, target), { signal: ac.signal })
+        if (!res.ok) { setStatus(`Error: ${res.status}`); setIsSearching(false); return }
+        const reader = res.body!.getReader()
+        const decoder = new TextDecoder()
+        let buf = ""
+        while (true) {
+          const { value, done } = await reader.read()
+          if (done) break
+          buf += decoder.decode(value, { stream: true })
+          const chunks = buf.split("\n\n")
+          buf = chunks.pop()!
+          for (const chunk of chunks) {
+            const line = chunk.split("\n").find(l => l.startsWith("data:"))
+            if (!line) continue
+            const ev = JSON.parse(line.slice(5).trim())
+            switch (ev.type) {
+              case "connected": break
+              case "total":
+                setStatus(`${ev.total.toLocaleString()} ${label} de ${destino}. Analizando...`)
+                setProgressTotal(ev.total)
+                break
+              case "usuario":
+                setAllResults(prev => [...prev, ev.usuario])
+                setProgressIdx(ev.idx)
+                setProgressTotal(ev.total)
+                break
+              case "error":
+                setStatus(`⚠ Error usuario ${ev.idx}: ${ev.msg}`)
+                break
+              case "done":
+                setStatus(`Completado. ${ev.total.toLocaleString()} ${label} cargados.`)
+                setProgressIdx(ev.total)
+                setProgressTotal(ev.total)
+                setIsSearching(false)
+                abortRef.current = null
+                break
+              case "fatal_error":
+                setStatus(`Error: ${ev.msg}`)
+                setIsSearching(false)
+                abortRef.current = null
+                break
+            }
+          }
+        }
+      } catch (e: any) {
+        if (e?.name === "AbortError") return
+        setStatus("Error de conexión con el servidor.")
+      } finally {
+        if (abortRef.current === ac) { abortRef.current = null; setIsSearching(false) }
       }
-    }
-
-    es.onerror = () => {
-      es.close()
-      if (!activeES.current) return
-      setStatus("Error de conexión con el servidor.")
-      setIsSearching(false)
-      activeES.current = null
-    }
+    })()
   }
 
   function clearResults() {
@@ -207,6 +223,7 @@ export function useSearch() {
     setResultsStack([])
     setResultsSource(null)
     setStatus("")
+    setCurrentTarget(null)
   }
 
   function goBack() {
@@ -282,6 +299,9 @@ interface BulkState {
   total: number
   current: string
   detail: string
+  fileSection: string   // "gallery" | "stories" | ""
+  fileCurrent: number
+  fileTotal: number
   done: { downloaded: number; skipped: number; failed: number; cancelled: boolean } | null
   error: string
   jobId: string | null
@@ -290,6 +310,7 @@ interface BulkState {
 
 const BULK_INIT: BulkState = {
   running: false, idx: 0, total: 0, current: "", detail: "",
+  fileSection: "", fileCurrent: 0, fileTotal: 0,
   done: null, error: "", jobId: null, cancelling: false,
 }
 
@@ -312,15 +333,15 @@ export function useBulkDownload(sessionId: string | null, onLogout: () => void) 
             } : {}),
           }
         case "bulk_start":   return { ...prev, total: ev.total }
-        case "user_start":   return { ...prev, idx: ev.idx, current: ev.username, detail: "iniciando…" }
-        case "user_skipped": return { ...prev, idx: ev.idx, current: ev.username, detail: `salteado (hace ${ev.age_hours}h)` }
+        case "user_start":   return { ...prev, idx: ev.idx, current: ev.username, detail: "iniciando…", fileCurrent: 0, fileTotal: 0, fileSection: "" }
+        case "user_skipped": return { ...prev, idx: ev.idx, current: ev.username, detail: `salteado (hace ${ev.age_hours}h)`, fileCurrent: 0, fileTotal: 0, fileSection: "" }
         case "phase":        return ev.scope === "item" ? { ...prev, detail: ev.label } : prev
-        case "total":        return ev.scope === "item" ? { ...prev, detail: `${ev.section === "gallery" ? "Galería" : "Historias"}: 0/${ev.total}` } : prev
-        case "download":     return ev.scope === "item" ? { ...prev, detail: `${ev.section === "gallery" ? "Galería" : "Historias"}: ${ev.current}/${ev.total}` } : prev
-        case "user_done":    return { ...prev, detail: `✓ +${ev.new_gallery} galería, +${ev.new_stories} historias` }
-        case "user_error":   return { ...prev, detail: `✗ ${ev.msg}` }
-        case "resting":      return { ...prev, detail: `descanso anti rate-limit (${ev.seconds}s)…` }
-        case "bulk_done":    return { ...prev, done: ev, current: "", detail: "" }
+        case "total":        return ev.scope === "item" ? { ...prev, detail: "", fileSection: ev.section, fileCurrent: 0, fileTotal: ev.total } : prev
+        case "download":     return ev.scope === "item" ? { ...prev, detail: "", fileSection: ev.section, fileCurrent: ev.current, fileTotal: ev.total } : prev
+        case "user_done":    return { ...prev, detail: `✓ ${ev.new_gallery} galería · ${ev.new_stories} historias`, fileCurrent: 0, fileTotal: 0, fileSection: "" }
+        case "user_error":   return { ...prev, detail: `✗ ${ev.msg}`, fileCurrent: 0, fileTotal: 0, fileSection: "" }
+        case "resting":      return { ...prev, detail: `descansando ${ev.seconds}s…`, fileCurrent: 0, fileTotal: 0, fileSection: "" }
+        case "bulk_done":    return { ...prev, done: ev, current: "", detail: "", fileCurrent: 0, fileTotal: 0, fileSection: "" }
         case "fatal_error":  return { ...prev, error: ev.msg }
         default:             return prev
       }
