@@ -25,24 +25,52 @@ def get_cached_user(session: Session, pk: int, ttl_days: int) -> InstagramUser |
 
 
 def upsert_user(session: Session, data: dict) -> InstagramUser:
-    """Inserta o actualiza un perfil y marca last_fetched_at = ahora."""
+    """Inserta o actualiza un perfil y marca last_fetched_at = ahora.
+
+    Usa INSERT … ON CONFLICT DO UPDATE (PostgreSQL) para evitar race
+    conditions cuando dos hilos intentan insertar el mismo pk.
+    """
     now = datetime.now(timezone.utc)
-    user = session.get(InstagramUser, data["pk"])
-    if user is None:
-        user = InstagramUser(pk=data["pk"], first_seen_at=now)
-        session.add(user)
-    user.username = data["username"]
-    user.full_name = data.get("full_name")
-    user.biography = data.get("biography") or ""
-    user.follower_count = data["follower_count"]
-    user.following_count = data["following_count"]
-    user.media_count = data["media_count"]
-    user.is_verified = data["is_verified"]
-    user.is_private = data["is_private"]
-    user.profile_pic_url = data.get("profile_pic_url")
-    user.profile_pic_url_hd = data.get("profile_pic_url_hd")
-    user.last_fetched_at = now
+    table = InstagramUser.__table__
+
+    stmt = (
+        pg_insert(table)
+        .values(
+            pk=data["pk"],
+            username=data["username"],
+            full_name=data.get("full_name"),
+            biography=data.get("biography") or "",
+            follower_count=data["follower_count"],
+            following_count=data["following_count"],
+            media_count=data["media_count"],
+            is_verified=data["is_verified"],
+            is_private=data["is_private"],
+            profile_pic_url=data.get("profile_pic_url"),
+            profile_pic_url_hd=data.get("profile_pic_url_hd"),
+            first_seen_at=now,
+            last_fetched_at=now,
+        )
+        .on_conflict_do_update(
+            index_elements=[table.c.pk],
+            set_={
+                "username": data["username"],
+                "full_name": data.get("full_name"),
+                "biography": data.get("biography") or "",
+                "follower_count": data["follower_count"],
+                "following_count": data["following_count"],
+                "media_count": data["media_count"],
+                "is_verified": data["is_verified"],
+                "is_private": data["is_private"],
+                "profile_pic_url": data.get("profile_pic_url"),
+                "profile_pic_url_hd": data.get("profile_pic_url_hd"),
+                "last_fetched_at": now,
+            },
+        )
+    )
+    session.execute(stmt)
     session.flush()
+
+    user = session.get(InstagramUser, data["pk"])
     return user
 
 

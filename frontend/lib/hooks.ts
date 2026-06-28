@@ -106,7 +106,7 @@ export function useSearch() {
   const [progressIdx, setProgressIdx]     = useState(0)
   const [progressTotal, setProgressTotal] = useState(0)
   const [resultsSource, setResultsSource] = useState<"cache" | "search" | null>(null)
-  const abortRef = useRef<AbortController | null>(null)
+  const abortRef = useRef<AbortController | EventSource | null>(null)
 
   // Keep mutable refs so closures inside callbacks see fresh values
   const currentTargetRef = useRef(currentTarget)
@@ -116,7 +116,13 @@ export function useSearch() {
   const resultsStackRef = useRef(resultsStack)
   useEffect(() => { resultsStackRef.current = resultsStack }, [resultsStack])
 
-  useEffect(() => () => abortRef.current?.abort(), [])
+  useEffect(() => () => {
+    const ac = abortRef.current
+    if (ac) {
+      if (ac instanceof EventSource) ac.close()
+      else (ac as AbortController).abort()
+    }
+  }, [])
 
   const progressPct = useMemo(
     () => progressTotal > 0 ? Math.round(progressIdx / progressTotal * 100) : 0,
@@ -134,7 +140,12 @@ export function useSearch() {
   }
 
   function stopSearch(statusMsg?: string) {
-    if (abortRef.current) { abortRef.current.abort(); abortRef.current = null }
+    const ac = abortRef.current
+    if (ac) {
+      if (ac instanceof EventSource) (ac as EventSource).close()
+      else (ac as AbortController).abort()
+      abortRef.current = null
+    }
     setIsSearching(false)
     setStatus(statusMsg ?? "")
     setProgressIdx(0)
@@ -159,63 +170,55 @@ export function useSearch() {
     setStatus(`Conectando con Instagram... (${destino})`)
     setIsSearching(true)
 
-    abortRef.current?.abort()
-    const ac = new AbortController()
-    abortRef.current = ac
+    const ac = abortRef.current
+    if (ac) {
+      if (ac instanceof EventSource) ac.close()
+      else ac.abort()
+    }
 
-    ;(async () => {
-      try {
-        const res = await fetch(buildStreamURL(sessionId, modo, target), { signal: ac.signal })
-        if (!res.ok) { setStatus(`Error: ${res.status}`); setIsSearching(false); return }
-        const reader = res.body!.getReader()
-        const decoder = new TextDecoder()
-        let buf = ""
-        while (true) {
-          const { value, done } = await reader.read()
-          if (done) break
-          buf += decoder.decode(value, { stream: true })
-          const chunks = buf.split("\n\n")
-          buf = chunks.pop()!
-          for (const chunk of chunks) {
-            const line = chunk.split("\n").find(l => l.startsWith("data:"))
-            if (!line) continue
-            const ev = JSON.parse(line.slice(5).trim())
-            switch (ev.type) {
-              case "connected": break
-              case "total":
-                setStatus(`${ev.total.toLocaleString()} ${label} de ${destino}. Analizando...`)
-                setProgressTotal(ev.total)
-                break
-              case "usuario":
-                setAllResults(prev => [...prev, ev.usuario])
-                setProgressIdx(ev.idx)
-                setProgressTotal(ev.total)
-                break
-              case "error":
-                setStatus(`⚠ Error usuario ${ev.idx}: ${ev.msg}`)
-                break
-              case "done":
-                setStatus(`Completado. ${ev.total.toLocaleString()} ${label} cargados.`)
-                setProgressIdx(ev.total)
-                setProgressTotal(ev.total)
-                setIsSearching(false)
-                abortRef.current = null
-                break
-              case "fatal_error":
-                setStatus(`Error: ${ev.msg}`)
-                setIsSearching(false)
-                abortRef.current = null
-                break
-            }
-          }
-        }
-      } catch (e: any) {
-        if (e?.name === "AbortError") return
-        setStatus("Error de conexión con el servidor.")
-      } finally {
-        if (abortRef.current === ac) { abortRef.current = null; setIsSearching(false) }
+    const es = new EventSource(buildStreamURL(sessionId, modo, target))
+    abortRef.current = es as any
+
+    es.onmessage = (e) => {
+      const ev = JSON.parse(e.data)
+      switch (ev.type) {
+        case "connected": break
+        case "total":
+          setProgressTotal(ev.total)
+          const items = ev.total.toLocaleString()
+          setStatus(`${items} ${label} de ${destino}. Analizando...`)
+          break
+        case "usuario":
+          setAllResults(prev => [...prev, ev.usuario])
+          setProgressIdx(ev.idx)
+          setProgressTotal(ev.total)
+          break
+        case "error":
+          setStatus(`⚠ Error usuario ${ev.idx}: ${ev.msg}`)
+          break
+        case "done":
+          setStatus(`Completado. ${ev.total.toLocaleString()} ${label} cargados.`)
+          setProgressIdx(ev.total)
+          setProgressTotal(ev.total)
+          setIsSearching(false)
+          es.close()
+          if (abortRef.current === es) abortRef.current = null
+          break
+        case "fatal_error":
+          setStatus(`Error: ${ev.msg}`)
+          setIsSearching(false)
+          es.close()
+          if (abortRef.current === es) abortRef.current = null
+          break
       }
-    })()
+    }
+
+    es.onerror = () => {
+      setIsSearching(false)
+      setStatus("Error de conexión con el servidor.")
+      es.close()
+      if (abortRef.current === es) abortRef.current = null
+    }
   }
 
   function clearResults() {
