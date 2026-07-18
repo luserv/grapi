@@ -185,7 +185,11 @@ async def seguidores_stream(
     async def event_stream():
         yield f"data: {json.dumps({'type': 'connected'})}\n\n"
         while True:
-            event = await queue.get()
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=15)
+            except asyncio.TimeoutError:
+                yield ": keepalive\n\n"
+                continue
             yield f"data: {json.dumps(event)}\n\n"
             if event.get("type") in ("done", "fatal_error"):
                 break
@@ -206,9 +210,22 @@ async def seguidores_stream(
 def proxy_image(url: str = Query(...)):
     """Proxy transparente para imágenes de perfil. Sin auth (CDN pública)."""
     try:
-        resp = req_lib.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        resp = req_lib.get(
+            url, timeout=20,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36",
+                "Accept": "image/webp,image/png,image/*,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://www.instagram.com/",
+            },
+            stream=True,
+        )
         resp.raise_for_status()
-        return Response(content=resp.content, media_type=resp.headers.get("content-type", "image/jpeg"))
+        return Response(
+            content=resp.content,
+            media_type=resp.headers.get("content-type", "image/jpeg"),
+            headers={"Cache-Control": "private, max-age=86400"},
+        )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Error al obtener imagen: {e}")
 
@@ -309,11 +326,15 @@ async def api_download_user_stream(
     session_id: str = Query(...),
     username: str = Query(...),
     user_id: str = Query(None),
+    sections: str = Query("gallery,stories"),
 ):
-    """SSE: descarga galería + historias de un usuario con progreso en tiempo real."""
+    """SSE: descarga galería + historias de un usuario con progreso en tiempo real.
+    sections: coma-separado, ej. \"gallery,stories\" o solo \"stories\"."""
     cl = sessions.get(session_id)
     if not cl:
         raise HTTPException(status_code=401, detail="Sesión no válida o expirada")
+
+    sections_list = [s.strip() for s in sections.split(",")]
 
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_event_loop()
@@ -323,7 +344,7 @@ async def api_download_user_stream(
 
     def run_download():
         try:
-            downloader.download_user(cl, username, user_id=user_id, on_progress=on_progress)
+            downloader.download_user(cl, username, user_id=user_id, on_progress=on_progress, sections=sections_list)
         except Exception as e:
             loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "msg": str(e)})
 
@@ -334,7 +355,7 @@ async def api_download_user_stream(
         while True:
             event = await queue.get()
             yield f"data: {json.dumps(event)}\n\n"
-            if event.get("type") in ("done", "error", "fatal_error"):
+            if event.get("type") in ("done", "fatal_error"):
                 break
 
     return StreamingResponse(

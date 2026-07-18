@@ -1,6 +1,7 @@
 "use client"
 import { useState, useEffect, useMemo } from "react"
 import { fetchDownloadsAPI, type User } from "@/lib/api"
+import { Check, XCircle, X, ArrowLeft, ArrowUpDown, Square } from "lucide-react"
 
 interface BulkState {
   running: boolean; idx: number; total: number; current: string; detail: string
@@ -26,7 +27,7 @@ interface Props {
   onAnalizar: (username: string, pk: number, stackTitle: string) => void
   onGoBack: () => void
   onExportCsv: () => void
-  onDownload: (username: string, pk: number) => void
+  onDownload: (username: string, pk: number, sections?: string) => void
   onStopDownload: (username: string) => void
   onStartBulk: (users: { username: string; pk: number }[]) => void
   onCancelBulk: () => void
@@ -66,6 +67,12 @@ export default function ResultsCard({
 
   useEffect(() => { loadDownloaded() }, [])
   useEffect(() => { if (bulk.done) loadDownloaded() }, [bulk.done])
+
+  const doneKeys = useMemo(
+    () => Object.entries(downloadStatus).filter(([, s]) => s === "ok" || s === "error").map(([u]) => u).join(","),
+    [downloadStatus],
+  )
+  useEffect(() => { if (doneKeys) loadDownloaded() }, [doneKeys])
 
   async function loadDownloaded() {
     const { res, data } = await fetchDownloadsAPI()
@@ -126,8 +133,8 @@ export default function ResultsCard({
   function btnLabel(username: string) {
     const s = downloadStatus[username]
     if (s === "downloading") return downloadLabel[username] || "..."
-    if (s === "ok") return "✓"
-    if (s === "error") return "✗"
+    if (s === "ok") return <><Check size={14} /> {downloadLabel[username]}</>
+    if (s === "error") return <><XCircle size={14} /> {downloadLabel[username]}</>
     return "Descargar"
   }
 
@@ -136,7 +143,7 @@ export default function ResultsCard({
       <div className="results-header">
         <div className="flex items-center gap-2">
           {resultsStack.length > 0 && (
-            <button className="btn-secondary btn-sm" onClick={onGoBack}>← Volver</button>
+            <button className="btn-secondary btn-sm" onClick={onGoBack}><ArrowLeft size={14} /> Volver</button>
           )}
           <h2>{resultsTitle}</h2>
         </div>
@@ -172,7 +179,7 @@ export default function ResultsCard({
                 }
                 <button className="btn-icon ml-auto" disabled={bulk.cancelling} onClick={onCancelBulk}
                   aria-label="Cancelar descarga masiva"
-                  title={bulk.cancelling ? "Cancelando…" : "Cancelar (guarda lo ya bajado)"}>×</button>
+                  title={bulk.cancelling ? "Cancelando…" : "Cancelar (guarda lo ya bajado)"}><X size={14} /></button>
               </div>
               {/* Barra de usuarios */}
               <div className="mt-[0.45rem] h-1 bg-surface-2 rounded-sm overflow-hidden">
@@ -187,15 +194,15 @@ export default function ResultsCard({
             </>
           )}
           {!bulk.running && bulk.error && (
-            <div className="flex items-center gap-[0.55rem] text-[0.82rem] flex-wrap text-danger">✗ {bulk.error}</div>
+            <div className="flex items-center gap-[0.55rem] text-[0.82rem] flex-wrap text-danger"><XCircle size={14} /> {bulk.error}</div>
           )}
           {!bulk.running && bulk.done && (
             <div className="flex items-center gap-[0.55rem] text-[0.82rem] flex-wrap">
-              {bulk.done.cancelled ? "■ Cancelado" : "✓ Listo"} ·{" "}
+              {bulk.done.cancelled ? <><Square size={12} /> Cancelado</> : <><Check size={12} /> Listo</>} ·{" "}
               <span className="num">{bulk.done.downloaded}</span> bajados ·{" "}
               <span className="num">{bulk.done.skipped}</span> salteados ·{" "}
               <span className="num">{bulk.done.failed}</span> fallaron
-              <button className="btn-icon" onClick={onClearBulkDone} aria-label="Cerrar">×</button>
+              <button className="btn-icon" onClick={onClearBulkDone} aria-label="Cerrar"><X size={14} /></button>
             </div>
           )}
         </div>
@@ -227,9 +234,9 @@ export default function ResultsCard({
               <th className="num hidden xs:table-cell">#</th>
               <th>Usuario</th>
               <th className="hidden sm:table-cell">Nombre</th>
-              <th className="sort num" onClick={() => toggleSort("follower_count")}>Seguidores ↕</th>
-              <th className="sort num hidden sm:table-cell" onClick={() => toggleSort("following_count")}>Siguiendo ↕</th>
-              <th className="sort num hidden sm:table-cell" onClick={() => toggleSort("media_count")}>Posts ↕</th>
+              <th className="sort num" onClick={() => toggleSort("follower_count")}>Seguidores <ArrowUpDown size={12} /></th>
+              <th className="sort num hidden sm:table-cell" onClick={() => toggleSort("following_count")}>Siguiendo <ArrowUpDown size={12} /></th>
+              <th className="sort num hidden sm:table-cell" onClick={() => toggleSort("media_count")}>Posts <ArrowUpDown size={12} /></th>
               <th className="hidden xs:table-cell">Estado</th>
               <th>Bajada</th>
               <th></th>
@@ -254,7 +261,7 @@ export default function ResultsCard({
                     <div className="flex items-center gap-2">
                       {u.profile_pic_url_hd && (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={proxyUrl(u.profile_pic_url_hd)} alt="" className="w-7 h-7 rounded-full object-cover shrink-0 bg-field hidden xxs:block" loading="lazy" />
+                        <img src={proxyUrl(u.profile_pic_url_hd)} alt="" className="w-7 h-7 rounded-full object-cover shrink-0 bg-field hidden xxs:block" loading="lazy" onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none" }} />
                       )}
                       <a href={`https://instagram.com/${u.username}`} target="_blank" rel="noreferrer" className="user-link">
                         @{u.username}
@@ -274,7 +281,7 @@ export default function ResultsCard({
                     {dl ? (
                       <span className={`font-mono text-[0.72rem] whitespace-nowrap ${dl.fresh ? "text-accent" : "text-private"}`}
                         title={`Galería: ${dl.gallery} · Historias: ${dl.stories} · ${dl.when.toLocaleString("es")}`}>
-                        ✓ {relTime(dl.ageH)}
+                        <Check size={12} /> {relTime(dl.ageH)}
                       </span>
                     ) : (
                       <span className="font-mono text-[0.72rem] whitespace-nowrap text-faint">—</span>
@@ -289,13 +296,24 @@ export default function ResultsCard({
                           <span className="font-mono text-accent whitespace-nowrap overflow-hidden text-ellipsis max-w-[70px] text-[0.65rem] sm:max-w-[110px] sm:text-[0.72rem]"
                             title={downloadLabel[u.username]}>{downloadLabel[u.username]}</span>
                           <button className="btn-icon" onClick={() => onStopDownload(u.username)}
-                            aria-label="Detener descarga">×</button>
+                            aria-label="Detener descarga"><X size={12} /></button>
                         </div>
+                      ) : downloadStatus[u.username] === "ok" || downloadStatus[u.username] === "error" ? (
+                        <span className={`font-mono whitespace-nowrap overflow-hidden text-ellipsis max-w-[140px] sm:max-w-[200px] text-[0.65rem] sm:text-[0.72rem] inline-flex items-center gap-1 ${downloadStatus[u.username] === "ok" ? "text-accent" : "text-danger"}`}
+                          title={downloadLabel[u.username]}>
+                          {downloadStatus[u.username] === "ok" ? <Check size={12} /> : <XCircle size={12} />}
+                          {downloadLabel[u.username]}
+                        </span>
                       ) : (
-                        <button className="btn-posts w-full sm:w-auto"
-                          onClick={() => onDownload(u.username, u.pk)}>
-                          {btnLabel(u.username)}
-                        </button>
+                        <>
+                          <button className="btn-posts w-full sm:w-auto"
+                            onClick={() => onDownload(u.username, u.pk)}>
+                            {btnLabel(u.username)}
+                          </button>
+                          <button className="btn-posts w-full sm:w-auto"
+                            onClick={() => onDownload(u.username, u.pk, "stories")}
+                            title="Solo historias (no galería)">Stories</button>
+                        </>
                       ))}
                     </div>
                   </td>

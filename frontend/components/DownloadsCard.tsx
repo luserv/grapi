@@ -1,6 +1,7 @@
 "use client"
 import { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { fetchDownloadsAPI, fetchUserDownloadsAPI, buildDownloadStreamURL, buildDownloadFileURL, checkSessionAPI, type MediaItem } from "@/lib/api"
+import { Check, XCircle, X, ArrowLeft, Play, Star, ChevronLeft, ChevronRight } from "lucide-react"
 
 const DL_TTL_HOURS = 24
 
@@ -107,7 +108,7 @@ export default function DownloadsCard({ sessionId }: { sessionId: string | null 
     setDlStatus(prev => ({ ...prev, [username]: "Verificando sesión..." }))
     const alive = await checkSessionAPI(sessionId)
     if (!alive) {
-      setDlStatus(prev => ({ ...prev, [username]: "✗ Sesión expirada — iniciá sesión de nuevo" }))
+      setDlStatus(prev => ({ ...prev, [username]: "Sesión expirada — iniciá sesión de nuevo" }))
       return
     }
     setDlStatus(prev => ({ ...prev, [username]: "Iniciando..." }))
@@ -129,11 +130,12 @@ export default function DownloadsCard({ sessionId }: { sessionId: string | null 
           if (selectedUser === username) selectUser(username)
           break
         case "fatal_error":
-        case "error":
           setDlStatus(p => ({ ...p, [username]: "✗" }))
           es.close()
           setDlActive(p => { const n = {...p}; delete n[username]; return n })
           break
+        case "error":
+          setDlStatus(p => ({ ...p, [username]: `⚠ ${ev.msg}` })); break
       }
     }
     es.onerror = () => {
@@ -181,8 +183,10 @@ export default function DownloadsCard({ sessionId }: { sessionId: string | null 
 
   function btnLabel(username: string) {
     const s = dlStatus[username]
-    if (s && s !== "✓" && s !== "✗") return s
-    return s || "Descargar"
+    if (s === "✓") return <><Check size={14} /> Descargado</>
+    if (s === "✗") return <><XCircle size={14} /> Error</>
+    if (s) return s
+    return "Descargar"
   }
 
   function isDownloading(username: string) {
@@ -196,7 +200,7 @@ export default function DownloadsCard({ sessionId }: { sessionId: string | null 
         <div className="results-header">
           <h2>{selectedUser ? `@${selectedUser}` : "Descargas locales"}</h2>
           <div className="flex gap-2">
-            {selectedUser && <button className="btn-secondary btn-sm" onClick={() => { setSelectedUser(null); setUserMedia(null) }}>← Volver</button>}
+            {selectedUser && <button className="btn-secondary btn-sm" onClick={() => { setSelectedUser(null); setUserMedia(null) }}><ArrowLeft size={14} /> Volver</button>}
             <button className="btn-secondary btn-sm" onClick={loadUsers}>Actualizar</button>
           </div>
         </div>
@@ -230,10 +234,10 @@ export default function DownloadsCard({ sessionId }: { sessionId: string | null 
                           disabled={isDownloading(username) || isFresh(username)}
                           title={isFresh(username) ? `Bajado ${freshLabel(username)} — se puede re-bajar después de 24h` : ""}
                           onClick={() => downloadUser(username)}>
-                          {isDownloading(username) ? btnLabel(username) : (isFresh(username) ? `✓ ${freshLabel(username)}` : btnLabel(username))}
+                          {isDownloading(username) ? btnLabel(username) : (isFresh(username) ? <><Check size={14} /> {freshLabel(username)}</> : btnLabel(username))}
                         </button>
                         {isDownloading(username) && (
-                          <button className="btn-icon" onClick={() => stopDownload(username)} aria-label="Detener">×</button>
+                          <button className="btn-icon" onClick={() => stopDownload(username)} aria-label="Detener"><X size={14} /></button>
                         )}
                       </div>
                     )}
@@ -274,7 +278,7 @@ export default function DownloadsCard({ sessionId }: { sessionId: string | null 
                                     <img className="w-full aspect-square object-cover block bg-field"
                                       src={url} alt={item.filename || "Sin descargar"} loading="lazy" />
                                   )}
-                                  {isVideo && <span className="post-badge">▶</span>}
+                                  {isVideo && <span className="post-badge"><Play size={10} /></span>}
                                 </div>
                               </div>
                             )
@@ -309,8 +313,8 @@ export default function DownloadsCard({ sessionId }: { sessionId: string | null 
                                     <img className="w-full aspect-square object-cover block bg-field"
                                       src={url} alt={item.filename || "Sin descargar"} loading="lazy" />
                                   )}
-                                  {isVideo && <span className="post-badge">▶</span>}
-                                  {item.highlight && <span className="post-badge left-[6px] right-auto bg-accent text-accent-ink text-[0.6rem]">★</span>}
+                                  {isVideo && <span className="post-badge"><Play size={10} /></span>}
+                                  {item.highlight && <span className="post-badge left-[6px] right-auto bg-accent text-accent-ink text-[0.6rem]"><Star size={8} /></span>}
                                 </div>
                                 {item.highlight && (
                                   <div className="text-[0.68rem] text-faint px-[0.4rem] py-1 whitespace-nowrap overflow-hidden text-ellipsis">{item.highlight}</div>
@@ -333,10 +337,10 @@ export default function DownloadsCard({ sessionId }: { sessionId: string | null 
                         onClick={() => downloadUser(userMedia.username)}>
                         {isDownloading(userMedia.username)
                           ? btnLabel(userMedia.username)
-                          : (isFresh(userMedia.username) ? `✓ Bajado ${freshLabel(userMedia.username)}` : "Actualizar descargas")}
+                          : (isFresh(userMedia.username) ? <><Check size={14} /> Bajado {freshLabel(userMedia.username)}</> : "Actualizar descargas")}
                       </button>
                       {isDownloading(userMedia.username) && (
-                        <button className="btn-icon" onClick={() => stopDownload(userMedia.username)} aria-label="Detener">×</button>
+                        <button className="btn-icon" onClick={() => stopDownload(userMedia.username)} aria-label="Detener"><X size={14} /></button>
                       )}
                     </div>
                   </div>
@@ -354,7 +358,7 @@ export default function DownloadsCard({ sessionId }: { sessionId: string | null 
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90"
             onClick={() => setLightbox(null)}>
             <button className="chip absolute left-6 z-10 text-xl px-4"
-              onClick={e => { e.stopPropagation(); moveLightbox(-1) }}>‹</button>
+              onClick={e => { e.stopPropagation(); moveLightbox(-1) }}><ChevronLeft size={20} /></button>
             {isVideo ? (
               <video key={url} src={url} controls autoPlay
                 className="max-w-[88vw] max-h-[88vh] rounded"
@@ -366,7 +370,7 @@ export default function DownloadsCard({ sessionId }: { sessionId: string | null 
                 onClick={e => e.stopPropagation()} />
             )}
             <button className="chip absolute right-6 z-10 text-xl px-4"
-              onClick={e => { e.stopPropagation(); moveLightbox(1) }}>›</button>
+              onClick={e => { e.stopPropagation(); moveLightbox(1) }}><ChevronRight size={20} /></button>
             <span className="absolute bottom-6 text-faint text-sm">
               {lightbox.idx + 1} / {lightbox.items.length}
             </span>

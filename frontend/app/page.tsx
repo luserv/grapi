@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from "react"
 import { useAuth, useSearch, useTable, useBulkDownload } from "@/lib/hooks"
 import { buildDownloadStreamURL } from "@/lib/api"
+import { Check, X, Plus, AlertCircle } from "lucide-react"
 import LoginCard     from "@/components/LoginCard"
 import SearchCard    from "@/components/SearchCard"
 import ResultsCard   from "@/components/ResultsCard"
@@ -43,10 +44,10 @@ export default function App() {
     setDownloadLabel(prev => { const n = { ...prev }; n[username] = ""; return n })
   }
 
-  function handleDownload(username: string, userId: number) {
+  function handleDownload(username: string, userId: number, sections?: string) {
     if (!auth.sessionId) return
     stopDownload(username)
-    const es = new EventSource(buildDownloadStreamURL(auth.sessionId, username, userId))
+    const es = new EventSource(buildDownloadStreamURL(auth.sessionId, username, userId, sections))
     activeDownloads.current[username] = es
     setDownloadStatus(prev => ({ ...prev, [username]: "downloading" }))
     setDownloadLabel(prev => ({ ...prev, [username]: "Iniciando..." }))
@@ -62,13 +63,14 @@ export default function App() {
           setDownloadLabel(p => ({ ...p, [username]: `${ev.section === "gallery" ? "Galería" : "Historias"}: ${ev.current}/${ev.total}` })); break
         case "done":
           setDownloadStatus(p => ({ ...p, [username]: "ok" }))
-          setDownloadLabel(p => ({ ...p, [username]: `✓ +${ev.new_gallery} galería, +${ev.new_stories} historias` }))
+          setDownloadLabel(p => ({ ...p, [username]: `+${ev.new_gallery} galería, +${ev.new_stories} historias` }))
           es.close(); delete activeDownloads.current[username]; break
         case "fatal_error":
-        case "error":
           setDownloadStatus(p => ({ ...p, [username]: "error" }))
           setDownloadLabel(p => ({ ...p, [username]: `Error: ${ev.msg}` }))
           es.close(); delete activeDownloads.current[username]; break
+        case "error":
+          setDownloadLabel(p => ({ ...p, [username]: `⚠ ${ev.msg}` })); break
       }
     }
     es.onerror = () => {
@@ -90,6 +92,10 @@ export default function App() {
   function handleSearch(modo: string) {
     if (search.isSearching || !auth.sessionId) return
     search.startSearch(auth.sessionId, modo)
+  }
+
+  function handleCancelSearch() {
+    search.stopSearch()
   }
 
   function handleAnalizar(username: string, pk: number, stackTitle: string) {
@@ -141,14 +147,14 @@ export default function App() {
                 className="text-faint hover:text-ink text-[0.7rem] px-[0.2rem] leading-none"
                 onClick={() => handleLogout(s.session_id)}
                 title={`Cerrar sesión de @${s.username}`}
-              >×</button>
+              ><X size={14} /></button>
             </div>
           ))}
           <button
             className={`tab text-[0.82rem] px-[0.55rem]${showLogin && !noSessions ? " on" : ""}`}
             onClick={() => setShowLogin(v => !v)}
             title="Agregar cuenta"
-          >+</button>
+          ><Plus size={14} /></button>
         </div>
       </nav>
 
@@ -175,6 +181,7 @@ export default function App() {
             status={search.status}
             currentTarget={search.currentTarget}
             onSearch={handleSearch}
+            onCancel={handleCancelSearch}
             onLogout={() => handleLogout()}
             onClearTarget={() => search.setTarget(null)}
           />

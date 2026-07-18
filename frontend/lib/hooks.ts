@@ -106,7 +106,7 @@ export function useSearch() {
   const [progressIdx, setProgressIdx]     = useState(0)
   const [progressTotal, setProgressTotal] = useState(0)
   const [resultsSource, setResultsSource] = useState<"cache" | "search" | null>(null)
-  const abortRef = useRef<AbortController | EventSource | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   // Keep mutable refs so closures inside callbacks see fresh values
   const currentTargetRef = useRef(currentTarget)
@@ -117,11 +117,7 @@ export function useSearch() {
   useEffect(() => { resultsStackRef.current = resultsStack }, [resultsStack])
 
   useEffect(() => () => {
-    const ac = abortRef.current
-    if (ac) {
-      if (ac instanceof EventSource) ac.close()
-      else (ac as AbortController).abort()
-    }
+    abortRef.current?.abort()
   }, [])
 
   const progressPct = useMemo(
@@ -140,19 +136,15 @@ export function useSearch() {
   }
 
   function stopSearch(statusMsg?: string) {
-    const ac = abortRef.current
-    if (ac) {
-      if (ac instanceof EventSource) (ac as EventSource).close()
-      else (ac as AbortController).abort()
-      abortRef.current = null
-    }
+    abortRef.current?.abort()
+    abortRef.current = null
     setIsSearching(false)
     setStatus(statusMsg ?? "")
     setProgressIdx(0)
     setProgressTotal(0)
   }
 
-  function startSearch(sessionId: string, modo: string, stackTitle = "") {
+  async function startSearch(sessionId: string, modo: string, stackTitle = "") {
     if (!sessionId) return
     setCurrentModo(modo)
     const label   = modo === "followers" ? "seguidores" : "seguidos"
@@ -170,23 +162,16 @@ export function useSearch() {
     setStatus(`Conectando con Instagram... (${destino})`)
     setIsSearching(true)
 
-    const ac = abortRef.current
-    if (ac) {
-      if (ac instanceof EventSource) ac.close()
-      else ac.abort()
-    }
+    abortRef.current?.abort()
+    const ac = new AbortController()
+    abortRef.current = ac
 
-    const es = new EventSource(buildStreamURL(sessionId, modo, target))
-    abortRef.current = es as any
-
-    es.onmessage = (e) => {
-      const ev = JSON.parse(e.data)
+    function handleEvent(ev: any) {
       switch (ev.type) {
         case "connected": break
         case "total":
           setProgressTotal(ev.total)
-          const items = ev.total.toLocaleString()
-          setStatus(`${items} ${label} de ${destino}. Analizando...`)
+          setStatus(`${ev.total.toLocaleString()} ${label} de ${destino}. Analizando...`)
           break
         case "usuario":
           setAllResults(prev => [...prev, ev.usuario])
@@ -201,23 +186,47 @@ export function useSearch() {
           setProgressIdx(ev.total)
           setProgressTotal(ev.total)
           setIsSearching(false)
-          es.close()
-          if (abortRef.current === es) abortRef.current = null
+          if (abortRef.current === ac) abortRef.current = null
           break
         case "fatal_error":
           setStatus(`Error: ${ev.msg}`)
           setIsSearching(false)
-          es.close()
-          if (abortRef.current === es) abortRef.current = null
+          if (abortRef.current === ac) abortRef.current = null
           break
       }
     }
 
-    es.onerror = () => {
-      setIsSearching(false)
-      setStatus("Error de conexión con el servidor.")
-      es.close()
-      if (abortRef.current === es) abortRef.current = null
+    try {
+      const res = await fetch(buildStreamURL(sessionId, modo, target), { signal: ac.signal })
+      if (!res.ok) {
+        setStatus(`Error del servidor (${res.status})`)
+        setIsSearching(false)
+        if (abortRef.current === ac) abortRef.current = null
+        return
+      }
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop()!
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue
+          try {
+            handleEvent(JSON.parse(line.slice(6)))
+          } catch {}
+        }
+      }
+    } catch (e: any) {
+      if (e.name !== "AbortError") {
+        setStatus("Error de conexión con el servidor.")
+        setIsSearching(false)
+      }
+      if (abortRef.current === ac) abortRef.current = null
     }
   }
 
