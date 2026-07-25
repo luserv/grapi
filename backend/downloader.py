@@ -145,7 +145,9 @@ def _fetch_medias(cl, user_id, on_progress):
     return []
 
 
-def download_user(cl, username, user_id=None, on_progress: Callable = None, should_cancel=None):
+def download_user(cl, username, user_id=None, on_progress: Callable = None, should_cancel=None, sections=None):
+    if sections is None:
+        sections = ["gallery", "stories"]
     metadata = _load_metadata(username)
 
     if user_id is None:
@@ -171,65 +173,78 @@ def download_user(cl, username, user_id=None, on_progress: Callable = None, shou
     new_items = {"gallery": 0, "stories": 0}
 
     # ── Galería ──
-    _emit(on_progress, {"type": "phase", "label": "Obteniendo lista de posts..."})
-    time.sleep(random.uniform(2, 5))
-    medias = _fetch_medias(cl, user_id, on_progress)
+    total = 0
+    if "gallery" in sections:
+        _emit(on_progress, {"type": "phase", "label": "Obteniendo lista de posts..."})
+        time.sleep(random.uniform(2, 5))
+        medias = _fetch_medias(cl, user_id, on_progress)
 
-    gallery_dir = _media_dir(username, "gallery")
-    total = len(medias)
-    _emit(on_progress, {"type": "total", "total": total, "section": "gallery"})
+        gallery_dir = _media_dir(username, "gallery")
+        total = len(medias)
+        _emit(on_progress, {"type": "total", "total": total, "section": "gallery"})
 
-    for idx, m in enumerate(medias, 1):
-        if _cancelled(should_cancel):
-            break
-        _emit(on_progress, {"type": "download", "current": idx, "total": total, "section": "gallery"})
-        if m.pk in seen:
-            continue
+        for idx, m in enumerate(medias, 1):
+            if _cancelled(should_cancel):
+                break
+            _emit(on_progress, {"type": "download", "current": idx, "total": total, "section": "gallery"})
+            if m.pk in seen:
+                continue
 
-        # Limpiar entradas fallidas/borradas de este PK antes de re-bajar
-        metadata["gallery"] = [
-            e for e in metadata["gallery"]
-            if not (e["pk"] == m.pk and (
-                not e.get("filename") or not (gallery_dir / e["filename"]).exists()
-            ))
-        ]
+            # Limpiar entradas fallidas/borradas de este PK antes de re-bajar
+            metadata["gallery"] = [
+                e for e in metadata["gallery"]
+                if not (e["pk"] == m.pk and (
+                    not e.get("filename") or not (gallery_dir / e["filename"]).exists()
+                ))
+            ]
 
-        items_to_dl = []
+            items_to_dl = []
 
-        if m.media_type == 8 and m.resources:
-            for i, r in enumerate(m.resources):
-                url = str(r.video_url or r.thumbnail_url or "")
+            if m.media_type == 8 and m.resources:
+                for i, r in enumerate(m.resources):
+                    url = str(r.video_url or r.thumbnail_url or "")
+                    if not url:
+                        continue
+                    ext_r = "mp4" if r.media_type == 2 or ".mp4" in url else "jpg"
+                    filename = _safe_filename(m.taken_at, f"{m.pk}_{i}", ext_r)
+                    items_to_dl.append((url, filename, r.media_type))
+            else:
+                url = str(m.video_url or m.thumbnail_url or "")
                 if not url:
                     continue
-                ext_r = "mp4" if r.media_type == 2 or ".mp4" in url else "jpg"
-                filename = _safe_filename(m.taken_at, f"{m.pk}_{i}", ext_r)
-                items_to_dl.append((url, filename, r.media_type))
-        else:
-            url = str(m.video_url or m.thumbnail_url or "")
-            if not url:
-                continue
-            filename = _safe_filename(m.taken_at, m.pk, _ext_from_media(m))
-            items_to_dl.append((url, filename, m.media_type))
+                filename = _safe_filename(m.taken_at, m.pk, _ext_from_media(m))
+                items_to_dl.append((url, filename, m.media_type))
 
-        for url, filename, media_type in items_to_dl:
-            downloaded = False
-            try:
-                _download_file(cl, url, gallery_dir / filename)
-                downloaded = True
-                new_items["gallery"] += 1
-            except Exception as e:
-                _emit(on_progress, {"type": "error", "msg": f"No se pudo bajar {filename}: {e}"})
-            metadata["gallery"].append({
-                "pk": m.pk,
-                "filename": filename if downloaded else None,
-                "taken_at": m.taken_at.isoformat(),
-                "media_type": media_type,
-                "thumbnail_url": url,
-            })
+            for url, filename, media_type in items_to_dl:
+                downloaded = False
+                try:
+                    _download_file(cl, url, gallery_dir / filename)
+                    downloaded = True
+                    new_items["gallery"] += 1
+                except Exception as e:
+                    _emit(on_progress, {"type": "error", "msg": f"No se pudo bajar {filename}: {e}"})
+                metadata["gallery"].append({
+                    "pk": m.pk,
+                    "filename": filename if downloaded else None,
+                    "taken_at": m.taken_at.isoformat(),
+                    "media_type": media_type,
+                    "thumbnail_url": url,
+                })
 
-        time.sleep(random.uniform(0.5, 1.5))
+            time.sleep(random.uniform(0.5, 1.5))
 
     # ── Historias ──
+    total_stories = 0
+    if "stories" not in sections:
+        _save_metadata(username, metadata)
+        _update_index(username)
+        _emit(on_progress, {"type": "done",
+                            "gallery": len(metadata["gallery"]),
+                            "stories": len(metadata["stories"]),
+                            "new_gallery": new_items["gallery"],
+                            "new_stories": new_items["stories"]})
+        return metadata, new_items
+
     if _cancelled(should_cancel):
         _save_metadata(username, metadata)
         _update_index(username)

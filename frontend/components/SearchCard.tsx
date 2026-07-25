@@ -1,5 +1,6 @@
 "use client"
 import { useState } from "react"
+import { X } from "lucide-react"
 
 interface Props {
   loggedUser: string
@@ -10,13 +11,14 @@ interface Props {
   status: string
   currentTarget: string | null
   onSearch: (modo: string) => void
+  onCancel: () => void
   onLogout: () => void
   onClearTarget: () => void
 }
 
 export default function SearchCard({
   loggedUser, isSearching, progressIdx, progressTotal, progressPct, status,
-  currentTarget, onSearch, onLogout, onClearTarget,
+  currentTarget, onSearch, onCancel, onLogout, onClearTarget,
 }: Props) {
   const [modo, setModo] = useState("following")
 
@@ -30,7 +32,7 @@ export default function SearchCard({
           <span className="text-accent font-semibold font-mono">@{currentTarget}</span>
           <button
             className="ml-auto p-1 flex items-center justify-center rounded-full border-0 bg-transparent text-faint leading-none transition-colors hover:bg-surface-2 hover:text-ink w-[1.8rem] h-[1.8rem] text-[0.9rem] sm:w-8 sm:h-8 sm:text-base"
-            aria-label="Volver a mi cuenta" onClick={onClearTarget}>×</button>
+            aria-label="Volver a mi cuenta" onClick={onClearTarget}><X size={14} /></button>
         </div>
       )}
 
@@ -41,9 +43,15 @@ export default function SearchCard({
           <input type="radio" id="r-followers" checked={modo === "followers"} onChange={() => setModo("followers")} />
           <label htmlFor="r-followers">{currentTarget ? "Sus seguidores" : "Mis seguidores"}</label>
         </div>
-        <button
-          className="btn-primary w-auto min-h-[44px] flex-1 px-[0.7rem] py-[0.4rem] text-[0.82rem] xs:px-4 xs:py-2 xs:text-[0.87rem] sm:flex-none"
-          disabled={isSearching} onClick={() => onSearch(modo)}>Buscar</button>
+        {isSearching ? (
+          <button
+            className="btn-secondary w-auto min-h-[44px] flex-1 px-[0.7rem] py-[0.4rem] text-[0.82rem] xs:px-4 xs:py-2 xs:text-[0.87rem] sm:flex-none"
+            onClick={onCancel}>Cancelar</button>
+        ) : (
+          <button
+            className="btn-primary w-auto min-h-[44px] flex-1 px-[0.7rem] py-[0.4rem] text-[0.82rem] xs:px-4 xs:py-2 xs:text-[0.87rem] sm:flex-none"
+            onClick={() => onSearch(modo)}>Buscar</button>
+        )}
         <button
           className="btn-secondary w-auto min-h-[44px] flex-1 px-[0.7rem] py-[0.4rem] text-[0.82rem] xs:px-4 xs:py-2 xs:text-[0.87rem] sm:flex-none"
           disabled={isSearching} onClick={onLogout}>Salir</button>

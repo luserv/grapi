@@ -1,6 +1,7 @@
 "use client"
 import { useState, useEffect } from "react"
 import { fetchRunsAPI, fetchRunDetailAPI, fetchDiffAPI, type Run } from "@/lib/api"
+import { ArrowRight } from "lucide-react"
 
 const MODO_LABEL: Record<string, string> = { following: "Seguidos", followers: "Seguidores" }
 
@@ -100,7 +101,7 @@ export default function HistoryCard({ sessionId }: { sessionId: string }) {
           <div className="diff-head">
             <span className="user-link">{runLabel(diff.base)}</span>
             <span className="text-faint">{fmtDate(diff.base.created_at)}</span>
-            <span className="text-faint">→</span>
+            <span className="text-faint"><ArrowRight size={14} /></span>
             <span className="user-link">{runLabel(diff.compare)}</span>
             <span className="text-faint">{fmtDate(diff.compare.created_at)}</span>
           </div>

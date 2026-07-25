@@ -80,9 +80,10 @@ export function buildStreamURL(sessionId: string, modo: string, targetUsername: 
   return url
 }
 
-export function buildDownloadStreamURL(sessionId: string, username: string, userId?: number | null) {
+export function buildDownloadStreamURL(sessionId: string, username: string, userId?: number | null, sections?: string) {
   let url = `/api/download-user/stream?session_id=${encodeURIComponent(sessionId)}&username=${encodeURIComponent(username)}`
   if (userId) url += `&user_id=${encodeURIComponent(userId)}`
+  if (sections) url += `&sections=${encodeURIComponent(sections)}`
   return url
 }
 

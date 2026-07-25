@@ -19,6 +19,7 @@ services:
   # ── Backend (FastAPI) ───────────────────────────────────────────────
   backend:
     build: ./backend
+    restart: on-failure
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-iguser}:${POSTGRES_PASSWORD:-igpass}@db:5432/${POSTGRES_DB:-igdb}
       CACHE_TTL_DAYS: "${CACHE_TTL_DAYS:-7}"
@@ -59,7 +60,7 @@ services:
     environment:
       NODE_ENV: development
     ports:
-      - "5174:3000"
+      - "5:3000"
     depends_on:
       - backend
     volumes:
