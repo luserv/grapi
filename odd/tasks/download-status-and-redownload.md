@@ -54,3 +54,9 @@ Strict TDD configured globally, but the project has no test runner or tests
   story/highlight entries from that bug (cleanup pending user decision).
 - ResultsCard: no freshness gate on per-user download; unchanged.
 - Commits still pending (pre-existing uncommitted user changes on main).
+- 2026-09-27: committed as f5cc72d on `feat/download-status-redownload` (user chose one combined
+  commit incl. prior WIP; tsbuildinfo and .atl/ excluded). RDD: medium, granted, reviewed
+  (reliability lens), approved + acknowledged (lineage review-a3cba402640c493c).
+  Advisory follow-ups (non-blocking): highlight partial fetch failure not surfaced in
+  section_errors (downloader.py:368-370); fatal-error 3s timer can clear a retry's label
+  (page.tsx:75-81); privileged host ports; no tests for formatDownloadSummary.
