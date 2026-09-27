@@ -45,6 +45,18 @@ export default function App() {
     setDownloadLabel(prev => { const n = { ...prev }; n[username] = ""; return n })
   }
 
+  // Limpia el error tras 3s, salvo que ya haya arrancado otra descarga del mismo usuario.
+  function clearErrorLater(username: string) {
+    setTimeout(() => {
+      if (activeDownloads.current[username]) return
+      setDownloadStatus(p => {
+        if (p[username] !== "error") return p
+        const n = { ...p }; delete n[username]; return n
+      })
+      setDownloadLabel(p => { const n = { ...p }; delete n[username]; return n })
+    }, 3000)
+  }
+
   function handleDownload(username: string, userId: number, sections?: string) {
     if (!auth.sessionId) return
     stopDownload(username)
@@ -72,13 +84,7 @@ export default function App() {
           setDownloadStatus(p => ({ ...p, [username]: "error" }))
           setDownloadLabel(p => ({ ...p, [username]: `Error: ${ev.msg}` }))
           es.close(); delete activeDownloads.current[username]
-          setTimeout(() => {
-            setDownloadStatus(p => {
-              if (p[username] !== "error") return p
-              const n = { ...p }; delete n[username]; return n
-            })
-            setDownloadLabel(p => { const n = { ...p }; delete n[username]; return n })
-          }, 3000)
+          clearErrorLater(username)
           break
         case "error":
           setDownloadLabel(p => ({ ...p, [username]: `Error: ${ev.msg}` })); break
@@ -88,13 +94,7 @@ export default function App() {
       setDownloadStatus(p => ({ ...p, [username]: "error" }))
       setDownloadLabel(p => ({ ...p, [username]: "Error de conexión" }))
       es.close(); delete activeDownloads.current[username]
-      setTimeout(() => {
-        setDownloadStatus(p => {
-          if (p[username] !== "error") return p
-          const n = { ...p }; delete n[username]; return n
-        })
-        setDownloadLabel(p => { const n = { ...p }; delete n[username]; return n })
-      }, 3000)
+      clearErrorLater(username)
     }
   }
 

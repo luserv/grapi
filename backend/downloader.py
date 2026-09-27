@@ -360,12 +360,14 @@ def download_user(cl, username, user_id=None, on_progress: Callable = None, shou
         highlight_sources = []
 
         # highlight_info_v1 usa feed/reels_media/ (API privada).
+        failed_titles = []
         try:
             highlights = cl.user_highlights_v1(user_id)
             for h in highlights:
                 try:
                     h_full = cl.highlight_info_v1(h.pk)
                 except Exception as e:
+                    failed_titles.append(h.title)
                     _emit(on_progress, {"type": "error", "msg": f"Error al obtener highlight '{h.title}': {e}"})
                     continue
                 total_highlight_items_found += len(h_full.items)
@@ -383,6 +385,10 @@ def download_user(cl, username, user_id=None, on_progress: Callable = None, shou
         except Exception as e:
             highlights_error = str(e)
             _emit(on_progress, {"type": "error", "msg": f"Error al obtener highlights: {e}"})
+
+        # Un fallo parcial no debe verse como "+0 destacadas" exitoso.
+        if failed_titles and highlights_error is None:
+            highlights_error = f"{len(failed_titles)} destacada(s) no se pudieron obtener: {', '.join(failed_titles)}"
 
         total_highlights = len(highlight_sources)
         _emit(on_progress, {"type": "total", "total": total_highlights, "section": "highlights"})

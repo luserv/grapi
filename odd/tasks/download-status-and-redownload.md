@@ -60,3 +60,9 @@ Strict TDD configured globally, but the project has no test runner or tests
   Advisory follow-ups (non-blocking): highlight partial fetch failure not surfaced in
   section_errors (downloader.py:368-370); fatal-error 3s timer can clear a retry's label
   (page.tsx:75-81); privileged host ports; no tests for formatDownloadSummary.
+- 2026-09-27 follow-ups (route: inline, 2 small targeted edits):
+  - [x] T4 highlights partial fetch failure now sets `section_errors.highlights` (downloader.py)
+  - [x] T5 fatal/connection error clear timer skips if a new download started (page.tsx `clearErrorLater`)
+  - [x] T6 deduped story/highlight metadata entries (data only, not in git): 11 removed, 0 left;
+        index.json counts recomputed. Backup: scratchpad meta-backup/downloads-meta.tgz.
+  Checks: py_compile OK, `npx tsc --noEmit` no errors.
