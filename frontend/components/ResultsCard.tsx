@@ -1,7 +1,7 @@
 "use client"
 import { useState, useEffect, useMemo } from "react"
 import { fetchDownloadsAPI, type User } from "@/lib/api"
-import { Check, XCircle, X, ArrowLeft, ArrowUpDown, Square } from "lucide-react"
+import { Check, XCircle, X, ArrowUpDown, Square } from "lucide-react"
 
 interface BulkState {
   running: boolean; idx: number; total: number; current: string; detail: string
@@ -20,12 +20,9 @@ interface Props {
   setFilter: (key: any, value: any) => void
   toggleSort: (col: string) => void
   applyFilters: (list: User[]) => User[]
-  resultsStack: { results: User[]; title: string }[]
   bulk: BulkState
   downloadStatus: Record<string, string>
   downloadLabel: Record<string, string>
-  onAnalizar: (username: string, pk: number, stackTitle: string) => void
-  onGoBack: () => void
   onExportCsv: () => void
   onDownload: (username: string, pk: number, sections?: string) => void
   onStopDownload: (username: string) => void
@@ -59,8 +56,8 @@ function fmtDuration(secs: number) {
 
 export default function ResultsCard({
   allResults, isSearching, sessionId, filters, filtered, sortCol, setFilter, toggleSort, applyFilters,
-  resultsStack, bulk, downloadStatus, downloadLabel,
-  onAnalizar, onGoBack, onExportCsv, onDownload, onStopDownload,
+  bulk, downloadStatus, downloadLabel,
+  onExportCsv, onDownload, onStopDownload,
   onStartBulk, onCancelBulk, onClearBulkDone,
 }: Props) {
   const [downloadedMap, setDownloadedMap] = useState<Record<string, any>>({})
@@ -84,7 +81,7 @@ export default function ResultsCard({
     if (!e?.downloaded_at) return null
     const when = new Date(e.downloaded_at)
     const ageH = (Date.now() - when.getTime()) / 3.6e6
-    return { when, ageH, fresh: ageH < DL_TTL_HOURS, gallery: e.gallery, stories: e.stories }
+    return { when, ageH, fresh: ageH < DL_TTL_HOURS, gallery: e.gallery, stories: e.stories, highlights: e.highlights || 0 }
   }
 
   function relTime(ageH: number) {
@@ -106,6 +103,7 @@ export default function ResultsCard({
     const eta = fmtDuration(estimateBulk(users.length))
     if (!confirm(
       `Voy a recorrer ${users.length} usuarios y bajar las galerías + historias nuevas.\n` +
+      `Incluye historias activas y destacadas.\n` +
       `Salteo a quien ya se bajó hace menos de 1 día.\n\n` +
       `Tiempo estimado: ${eta} (aprox).\n` +
       `Corre en segundo plano: podés cerrar la pestaña y volver.\n¿Continuar?`
@@ -142,9 +140,6 @@ export default function ResultsCard({
     <div className="card card-wide results-card">
       <div className="results-header">
         <div className="flex items-center gap-2">
-          {resultsStack.length > 0 && (
-            <button className="btn-secondary btn-sm" onClick={onGoBack}><ArrowLeft size={14} /> Volver</button>
-          )}
           <h2>{resultsTitle}</h2>
         </div>
         <div className="flex gap-2 items-center">
@@ -233,18 +228,16 @@ export default function ResultsCard({
             <tr>
               <th className="num hidden xs:table-cell">#</th>
               <th>Usuario</th>
-              <th className="hidden sm:table-cell">Nombre</th>
               <th className="sort num" onClick={() => toggleSort("follower_count")}>Seguidores <ArrowUpDown size={12} /></th>
               <th className="sort num hidden sm:table-cell" onClick={() => toggleSort("following_count")}>Siguiendo <ArrowUpDown size={12} /></th>
               <th className="sort num hidden sm:table-cell" onClick={() => toggleSort("media_count")}>Posts <ArrowUpDown size={12} /></th>
-              <th className="hidden xs:table-cell">Estado</th>
               <th>Bajada</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 && (
-              <tr><td colSpan={9} className="empty">
+              <tr><td colSpan={7} className="empty">
                 {isSearching
                   ? "Consultando Instagram, esperá…"
                   : allResults.length > 0
@@ -263,24 +256,21 @@ export default function ResultsCard({
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={proxyUrl(u.profile_pic_url_hd)} alt="" className="w-7 h-7 rounded-full object-cover shrink-0 bg-field hidden xxs:block" loading="lazy" onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none" }} />
                       )}
-                      <a href={`https://instagram.com/${u.username}`} target="_blank" rel="noreferrer" className="user-link">
-                        @{u.username}
-                      </a>
+                      <div className="min-w-0">
+                        <a href={`https://instagram.com/${u.username}`} target="_blank" rel="noreferrer" className="user-link">
+                          @{u.username}
+                        </a>
+                        {u.full_name && <div className="text-dim text-[0.75rem] truncate">{u.full_name}</div>}
+                      </div>
                     </div>
                   </td>
-                  <td className="text-dim hidden sm:table-cell">{u.full_name || "—"}</td>
                   <td className="num">{u.follower_count.toLocaleString()}</td>
                   <td className="num hidden sm:table-cell">{u.following_count.toLocaleString()}</td>
                   <td className="num hidden sm:table-cell">{u.media_count.toLocaleString()}</td>
-                  <td className="hidden xs:table-cell">
-                    {u.is_verified && <span className="badge badge-v">Verificado</span>}
-                    {u.is_private  && <span className="badge badge-p">Privado</span>}
-                    {!u.is_verified && !u.is_private && "—"}
-                  </td>
                   <td>
                     {dl ? (
                       <span className={`font-mono text-[0.72rem] whitespace-nowrap ${dl.fresh ? "text-accent" : "text-private"}`}
-                        title={`Galería: ${dl.gallery} · Historias: ${dl.stories} · ${dl.when.toLocaleString("es")}`}>
+                        title={`Galería: ${dl.gallery} · Historias: ${dl.stories} · Destacadas: ${dl.highlights} · ${dl.when.toLocaleString("es")}`}>
                         <Check size={12} /> {relTime(dl.ageH)}
                       </span>
                     ) : (
@@ -289,8 +279,6 @@ export default function ResultsCard({
                   </td>
                   <td>
                     <div className="flex flex-col gap-1 py-[0.4rem] whitespace-nowrap sm:flex-row sm:gap-[0.35rem]">
-                      <button className="btn-analizar w-full sm:w-auto"
-                        onClick={() => onAnalizar(u.username, u.pk, resultsTitle)}>Analizar</button>
                       {sessionId && (downloadStatus[u.username] === "downloading" ? (
                         <div className="flex items-center gap-[0.3rem]">
                           <span className="font-mono text-accent whitespace-nowrap overflow-hidden text-ellipsis max-w-[70px] text-[0.65rem] sm:max-w-[110px] sm:text-[0.72rem]"
@@ -312,7 +300,10 @@ export default function ResultsCard({
                           </button>
                           <button className="btn-posts w-full sm:w-auto"
                             onClick={() => onDownload(u.username, u.pk, "stories")}
-                            title="Solo historias (no galería)">Stories</button>
+                            title="Solo historias activas (no galería)">Stories</button>
+                          <button className="btn-posts w-full sm:w-auto"
+                            onClick={() => onDownload(u.username, u.pk, "highlights")}
+                            title="Solo historias destacadas">Destacadas</button>
                         </>
                       ))}
                     </div>

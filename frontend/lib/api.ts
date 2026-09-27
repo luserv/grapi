@@ -14,6 +14,7 @@ export interface User {
 export interface DownloadEntry {
   gallery: number
   stories: number
+  highlights: number
   downloaded_at: string | null
   user_pk: number | null
 }

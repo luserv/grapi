@@ -2,7 +2,8 @@
 import { useState, useEffect, useRef } from "react"
 import { useAuth, useSearch, useTable, useBulkDownload } from "@/lib/hooks"
 import { buildDownloadStreamURL } from "@/lib/api"
-import { Check, X, Plus, AlertCircle } from "lucide-react"
+import { formatDownloadSummary, sectionLabel, type DownloadDoneEvent } from "@/lib/downloadSummary"
+import { X, Plus } from "lucide-react"
 import LoginCard     from "@/components/LoginCard"
 import SearchCard    from "@/components/SearchCard"
 import ResultsCard   from "@/components/ResultsCard"
@@ -58,25 +59,42 @@ export default function App() {
         case "phase":
           setDownloadLabel(p => ({ ...p, [username]: ev.label })); break
         case "total":
-          setDownloadLabel(p => ({ ...p, [username]: `${ev.section === "gallery" ? "Galería" : "Historias"}: 0/${ev.total}` })); break
+          setDownloadLabel(p => ({ ...p, [username]: `${sectionLabel(ev.section)}: 0/${ev.total}` })); break
         case "download":
-          setDownloadLabel(p => ({ ...p, [username]: `${ev.section === "gallery" ? "Galería" : "Historias"}: ${ev.current}/${ev.total}` })); break
-        case "done":
+          setDownloadLabel(p => ({ ...p, [username]: `${sectionLabel(ev.section)}: ${ev.current}/${ev.total}` })); break
+        case "done": {
+          const segments = formatDownloadSummary(ev as DownloadDoneEvent)
           setDownloadStatus(p => ({ ...p, [username]: "ok" }))
-          setDownloadLabel(p => ({ ...p, [username]: `+${ev.new_gallery} galería, +${ev.new_stories} historias` }))
+          setDownloadLabel(p => ({ ...p, [username]: segments.map(s => s.text).join(" · ") }))
           es.close(); delete activeDownloads.current[username]; break
+        }
         case "fatal_error":
           setDownloadStatus(p => ({ ...p, [username]: "error" }))
           setDownloadLabel(p => ({ ...p, [username]: `Error: ${ev.msg}` }))
-          es.close(); delete activeDownloads.current[username]; break
+          es.close(); delete activeDownloads.current[username]
+          setTimeout(() => {
+            setDownloadStatus(p => {
+              if (p[username] !== "error") return p
+              const n = { ...p }; delete n[username]; return n
+            })
+            setDownloadLabel(p => { const n = { ...p }; delete n[username]; return n })
+          }, 3000)
+          break
         case "error":
-          setDownloadLabel(p => ({ ...p, [username]: `⚠ ${ev.msg}` })); break
+          setDownloadLabel(p => ({ ...p, [username]: `Error: ${ev.msg}` })); break
       }
     }
     es.onerror = () => {
       setDownloadStatus(p => ({ ...p, [username]: "error" }))
       setDownloadLabel(p => ({ ...p, [username]: "Error de conexión" }))
       es.close(); delete activeDownloads.current[username]
+      setTimeout(() => {
+        setDownloadStatus(p => {
+          if (p[username] !== "error") return p
+          const n = { ...p }; delete n[username]; return n
+        })
+        setDownloadLabel(p => { const n = { ...p }; delete n[username]; return n })
+      }, 3000)
     }
   }
 
@@ -96,18 +114,6 @@ export default function App() {
 
   function handleCancelSearch() {
     search.stopSearch()
-  }
-
-  function handleAnalizar(username: string, pk: number, stackTitle: string) {
-    if (search.isSearching || !auth.sessionId) return
-    search.stopSearch()
-    search.setTarget(username)
-    search.startSearch(auth.sessionId, search.currentModo, stackTitle)
-  }
-
-  function handleGoBack() {
-    search.stopSearch()
-    search.goBack()
   }
 
   function handleExportCsv() {
@@ -196,12 +202,9 @@ export default function App() {
               setFilter={table.setFilter}
               toggleSort={table.toggleSort}
               applyFilters={table.applyFilters}
-              resultsStack={search.resultsStack}
               bulk={bulk.bulk}
               downloadStatus={downloadStatus}
               downloadLabel={downloadLabel}
-              onAnalizar={handleAnalizar}
-              onGoBack={handleGoBack}
               onExportCsv={handleExportCsv}
               onDownload={handleDownload}
               onStopDownload={stopDownload}

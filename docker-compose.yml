@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-igpass}
       POSTGRES_DB: ${POSTGRES_DB:-igdb}
     ports:
-      - "5432:5432"
+      - "11:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -28,7 +28,7 @@ services:
       SESSIONS_DIR: /data/sessions
     command: sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     ports:
-      - "8000:8000"
+      - "12:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -60,7 +60,7 @@ services:
     environment:
       NODE_ENV: development
     ports:
-      - "5:3000"
+      - "14:3000"
     depends_on:
       - backend
     volumes:

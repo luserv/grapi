@@ -326,7 +326,7 @@ async def api_download_user_stream(
     session_id: str = Query(...),
     username: str = Query(...),
     user_id: str = Query(None),
-    sections: str = Query("gallery,stories"),
+    sections: str = Query("gallery,stories,highlights"),
 ):
     """SSE: descarga galería + historias de un usuario con progreso en tiempo real.
     sections: coma-separado, ej. \"gallery,stories\" o solo \"stories\"."""
@@ -385,13 +385,14 @@ def _apply_event_to_state(st: dict, ev: dict):
         else:
             st["detail"] = "iniciando…"
     elif t == "user_done":
-        st["detail"] = f"✓ +{ev.get('new_gallery', 0)} galería, +{ev.get('new_stories', 0)} historias"
+        st["detail"] = f"✓ +{ev.get('new_gallery', 0)} galería, +{ev.get('new_stories', 0)} historias, +{ev.get('new_highlights', 0)} destacadas"
     elif t == "user_error":
         st["detail"] = f"✗ {ev.get('msg', '')}"
     elif t == "resting":
         st["detail"] = f"descanso anti rate-limit ({ev.get('seconds')}s)…"
     elif ev.get("scope") == "item":
-        sec = "Galería" if ev.get("section") == "gallery" else "Historias"
+        sec_map = {"gallery": "Galería", "stories": "Historias", "highlights": "Destacadas"}
+        sec = sec_map.get(ev.get("section"), "Medios")
         if t == "phase":
             st["detail"] = ev.get("label", "")
         elif t == "total":
@@ -654,6 +655,8 @@ def api_serve_download(username: str, filename: str):
         filepath = downloader.BASE_DIR / username / "gallery" / filename
     if not filepath.exists():
         filepath = downloader.BASE_DIR / username / "stories" / filename
+    if not filepath.exists():
+        filepath = downloader.BASE_DIR / username / "highlights" / filename
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
     from fastapi.responses import FileResponse
