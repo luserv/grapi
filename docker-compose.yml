@@ -59,6 +59,7 @@ services:
     command: npm run dev -- -p 3000
     environment:
       NODE_ENV: development
+      BACKEND_URL: http://backend:8000
     ports:
       - "14:3000"
     depends_on:
