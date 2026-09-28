@@ -49,11 +49,16 @@ class InstagramUser(Base):
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # Cuándo se consultó el perfil completo por última vez (= cuándo se
+    # refrescaron los contadores). `last_fetched_at` queda como "cuándo se
+    # confirmó la identidad". La identidad NO depende de esta fecha: se relee
+    # del listado de following/followers en cada análisis, gratis.
     last_fetched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), index=True
+        DateTime(timezone=True), server_default=func.now()
     )
-
-    memberships: Mapped[list["RunMember"]] = relationship(back_populates="user")
+    metrics_fetched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
 
 
 class AnalysisRun(Base):
@@ -79,7 +84,15 @@ class AnalysisRun(Base):
 
 
 class RunMember(Base):
-    """Vínculo corrida↔usuario, con snapshot de conteos al momento."""
+    """Vínculo corrida↔usuario: un snapshot del perfil tal como estaba.
+
+    Es un snapshot AUTOCONTENIDO a propósito. Antes `user_pk` era una FK a
+    `instagram_users` con ON DELETE CASCADE, lo que rompía el historial de dos
+    formas: purgar la caché borraba las corridas, y leer username/badges a
+    través de la relación devolvía el valor de HOY, no el del análisis — la
+    misma mentira que leer los conteos en vivo. `user_pk` queda como entero
+    plano para poder correlacionar con la caché, pero nada depende de ella.
+    """
     __tablename__ = "run_members"
     __table_args__ = (UniqueConstraint("run_id", "user_pk", name="uq_run_user"),)
 
@@ -87,15 +100,16 @@ class RunMember(Base):
     run_id: Mapped[int] = mapped_column(
         ForeignKey("analysis_runs.id", ondelete="CASCADE"), index=True
     )
-    user_pk: Mapped[int] = mapped_column(
-        ForeignKey("instagram_users.pk", ondelete="CASCADE"), index=True
-    )
+    user_pk: Mapped[int] = mapped_column(BigInteger, index=True)
     position: Mapped[int] = mapped_column(Integer)  # orden dentro de la corrida
 
-    # Snapshot: los conteos pueden cambiar entre corridas; esto los congela.
+    # Snapshot: identidad y conteos congelados en el momento del análisis.
+    username: Mapped[str] = mapped_column(String(150), index=True)
+    full_name: Mapped[str | None] = mapped_column(String(255))
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_private: Mapped[bool] = mapped_column(Boolean, default=False)
     follower_count: Mapped[int] = mapped_column(Integer)
     following_count: Mapped[int] = mapped_column(Integer)
     media_count: Mapped[int] = mapped_column(Integer)
 
     run: Mapped["AnalysisRun"] = relationship(back_populates="members")
-    user: Mapped["InstagramUser"] = relationship(back_populates="memberships")

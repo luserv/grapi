@@ -92,18 +92,28 @@ def obtener_usuarios(
     modo: str = "following",
     on_progress: Callable[[dict], None] = None,
     target_user_id: str = None,
+    target_username: str = None,
     session=None,
-    ttl_days: int = 7,
+    metrics_ttl_days: int = 180,
 ) -> list[dict]:
     """
     Obtiene todos los usuarios (following o followers) sin filtrar.
     El filtrado se hace en el cliente.
 
+    Dos fuentes, dos costos:
+      - El LISTADO (user_following / user_followers_v1) devuelve un `UserShort`
+        por usuario con username, full_name, badges y fotos. Es UNA llamada
+        total y trae la identidad al día: se usa siempre, gratis.
+      - Los CONTADORES (follower/following/media) no vienen en el listado.
+        Requerirían un `user_info_v1` por usuario, que es lo caro. Por eso
+        viven cacheados con TTL propio (`metrics_ttl_days`) y son lo único que
+        puede estar viejo.
+
     Llama a on_progress con eventos del tipo:
         {"type": "total",   "total": int}
         {"type": "usuario", "idx": int, "total": int, "usuario": dict, "cached": bool}
         {"type": "error",   "idx": int, "msg": str}
-        {"type": "done",    "total": int, "from_cache": int}
+        {"type": "done",    "total": int, "from_cache": int, "refreshed": int, "stale": int}
     """
     # Import local para que el CLI / usos sin DB no dependan de SQLAlchemy.
     repository = None
@@ -119,62 +129,110 @@ def obtener_usuarios(
 
     _emit(on_progress, {"type": "total", "total": total})
 
+    # Una corrida por análisis para el historial. Sin owner no se puede atribuir
+    # la corrida a ninguna cuenta, así que se omite en vez de escribir basura.
+    run_id = None
+    if repository is not None and cl.username:
+        run = repository.create_run(
+            session,
+            owner_username=cl.username,
+            modo=modo,
+            target_username=target_username,
+            target_user_id=str(user_id),
+        )
+        run_id = run.id
+        session.commit()
+
     resultado = []
     from_cache = 0
+    refreshed = 0
+    stale = 0
     seen_pks = set()
 
-    for idx, (uid, _) in enumerate(usuarios.items(), 1):
+    for idx, (uid, short) in enumerate(usuarios.items(), 1):
         pk = int(uid)
         if pk in seen_pks:
             continue
         seen_pks.add(pk)
         try:
-            db_user = None
-            cached = repository.get_cached_user(session, int(uid), ttl_days) if repository else None
+            cached = repository.get_cached_user(session, pk) if repository else None
 
-            if cached is not None:
+            # Identidad: el listado es la fuente y siempre está al día.
+            identidad = _identity_from_short(pk, short)
+
+            if cached is not None and repository.metrics_are_fresh(cached, metrics_ttl_days):
+                # HIT TOTAL: cero requests. El listado ya se descargó igual, así
+                # que su identidad se aplica gratis y la fila no puede quedar
+                # vieja en nombre, foto ni badges. Solo los contadores salen de
+                # la cache — que es justo lo que el TTL gobierna.
                 usuario = repository.user_to_dict(cached)
-                # Cache sin foto (registro anterior a la migración): actualizar
-                if not usuario.get("profile_pic_url_hd"):
-                    try:
-                        fresh = cl.user_info_v1(uid)
-                        if fresh.profile_pic_url_hd:
-                            usuario["profile_pic_url_hd"] = str(fresh.profile_pic_url_hd)
-                            usuario["profile_pic_url"] = str(fresh.profile_pic_url)
-                            if repository:
-                                repository.upsert_user(session, usuario)
-                    except Exception:
-                        pass
-                db_user = cached
+                usuario.update(identidad)
                 from_cache += 1
                 resultado.append(usuario)
                 _emit(on_progress, {"type": "usuario", "idx": idx, "total": total,
                                     "usuario": usuario, "cached": True})
             else:
-                user_info = cl.user_info_v1(uid)
-                usuario = {
-                    "pk": int(user_info.pk),
-                    "username": user_info.username,
-                    "full_name": user_info.full_name,
-                    "biography": user_info.biography or "",
-                    "follower_count": user_info.follower_count,
-                    "following_count": user_info.following_count,
-                    "media_count": user_info.media_count,
-                    "is_verified": user_info.is_verified,
-                    "is_private": user_info.is_private,
-                    "profile_pic_url": str(user_info.profile_pic_url),
-                    "profile_pic_url_hd": str(user_info.profile_pic_url_hd) if user_info.profile_pic_url_hd else None,
-                }
+                # Hay que traer contadores. Se intenta el request caro; si
+                # falla, si había cache se sirve con los números viejos en vez
+                # de perder al usuario de la tabla.
+                usuario = (
+                    repository.user_to_dict(cached) if cached is not None
+                    else {**identidad, "biography": "",
+                          "follower_count": 0, "following_count": 0, "media_count": 0}
+                )
+                # El listado manda en identidad: está más fresco que la fila.
+                usuario.update(identidad)
+                if cached is not None:
+                    usuario["biography"] = cached.biography or ""
+
+                try:
+                    user_info = cl.user_info_v1(uid)
+                    usuario.update({
+                        "username": user_info.username,
+                        "full_name": user_info.full_name,
+                        "biography": user_info.biography or "",
+                        "follower_count": user_info.follower_count,
+                        "following_count": user_info.following_count,
+                        "media_count": user_info.media_count,
+                        "is_verified": user_info.is_verified,
+                        "is_private": user_info.is_private,
+                        "profile_pic_url": str(user_info.profile_pic_url),
+                        "profile_pic_url_hd": (
+                            str(user_info.profile_pic_url_hd) if user_info.profile_pic_url_hd else None
+                        ),
+                    })
+                    if repository:
+                        repository.upsert_user(
+                            session, {**usuario, "metrics_fresh": True}
+                        )
+                    refreshed += 1
+                except Exception as e:
+                    if cached is None:
+                        raise  # sin cache no hay nada que servir → error normal
+                    _emit(on_progress, {
+                        "type": "error", "idx": idx,
+                        "msg": f"{e} · servidos los contadores cacheados",
+                    })
+                    if repository:
+                        repository.upsert_user(
+                            session, {**usuario, "metrics_fresh": False}
+                        )
+                    stale += 1
+
                 resultado.append(usuario)
-                if repository:
-                    db_user = repository.upsert_user(session, usuario)
                 _emit(on_progress, {"type": "usuario", "idx": idx, "total": total,
                                     "usuario": usuario, "cached": False})
 
-                # Delays SOLO en miss real (el cache hit no toca la API).
+                # Delays SOLO cuando hubo request real (el hit total no toca la API).
                 time.sleep(random.uniform(4, 8))
                 if idx % 30 == 0:
                     time.sleep(random.uniform(40, 70))
+
+            if repository and run_id is not None:
+                # Se pasa `usuario` (el dict de esta corrida), no el objeto ORM:
+                # tras un refresco de contadores el identity map sigue teniendo
+                # los valores viejos y el snapshot congelaría el número viejo.
+                repository.add_member(session, run_id, usuario, position=idx)
 
             if repository:
                 session.commit()
@@ -186,11 +244,35 @@ def obtener_usuarios(
             time.sleep(random.uniform(15, 30))
 
     if repository:
+        if run_id is not None:
+            repository.finalize_run(session, run_id, total=len(resultado), from_cache=from_cache)
         session.commit()
 
-    _emit(on_progress, {"type": "done", "total": len(resultado), "from_cache": from_cache})
+    _emit(on_progress, {"type": "done", "total": len(resultado), "from_cache": from_cache,
+                        "refreshed": refreshed, "stale": stale})
 
     return sorted(resultado, key=lambda x: x["follower_count"], reverse=True)
+
+
+def _identity_from_short(pk: int, short) -> dict:
+    """Identidad que ya venía en el listado: sin costo de API.
+
+    Es lo que hace que la fila cacheada no pueda quedar vieja en nombre, foto
+    ni badges: eso se relee del listado en cada análisis.
+    """
+    if short is None:
+        return {}
+    return {
+        "pk": pk,
+        "username": short.username,
+        "full_name": short.full_name,
+        "is_verified": bool(short.is_verified),
+        "is_private": bool(short.is_private),
+        "profile_pic_url": str(short.profile_pic_url) if short.profile_pic_url else None,
+        "profile_pic_url_hd": (
+            str(short.profile_pic_url_hd) if short.profile_pic_url_hd else None
+        ),
+    }
 
 
 def _emit(callback: Callable | None, event: dict):

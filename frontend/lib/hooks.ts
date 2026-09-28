@@ -95,6 +95,22 @@ export function useAuth() {
   }
 }
 
+// Resumen del análisis: de dónde salió cada perfil. "caché" = ni un request a
+// Instagram. "consultados" = hubo que refrescar los contadores. "cacheados" =
+// se sirvió el perfil aunque Instagram falló, con los contadores viejos.
+function doneMessage(
+  total: number, fromCache: number, label: string,
+  refreshed = 0, stale = 0,
+) {
+  const base = `Completado. ${total.toLocaleString()} ${label} cargados.`
+  if (!total) return base
+  const parts: string[] = []
+  if (fromCache) parts.push(`${fromCache.toLocaleString()} de caché`)
+  if (refreshed) parts.push(`${refreshed.toLocaleString()} consultados a Instagram`)
+  if (stale) parts.push(`${stale.toLocaleString()} con contadores viejos (Instagram falló)`)
+  return parts.length ? `${base} ${parts.join(" · ")}` : base
+}
+
 // ── useSearch ──────────────────────────────────────────────────────
 export function useSearch() {
   const [allResults, setAllResults]       = useState<User[]>([])
@@ -182,7 +198,8 @@ export function useSearch() {
           setStatus(`⚠ Error usuario ${ev.idx}: ${ev.msg}`)
           break
         case "done":
-          setStatus(`Completado. ${ev.total.toLocaleString()} ${label} cargados.`)
+          setStatus(doneMessage(ev.total ?? 0, ev.from_cache ?? 0, label,
+                                ev.refreshed ?? 0, ev.stale ?? 0))
           setProgressIdx(ev.total)
           setProgressTotal(ev.total)
           setIsSearching(false)

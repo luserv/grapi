@@ -126,21 +126,27 @@ async def seguidores_stream(
     session_id: str = Query(...),
     modo: str = Query("following"),
     target_username: str = Query(None),
+    refresh: int = Query(0),
 ):
     """
     Server-Sent Events: emite eventos de progreso y resultados mientras
     recorre los seguidores del usuario autenticado o de target_username.
 
+    `refresh=1` ignora METRICS_TTL_DAYS y re-consulta los contadores de todos
+    los perfiles: es el escape hatch para "dame números frescos ahora" sin
+    editar el .env ni recrear el container. Cuesta un request por usuario.
+
     Eventos JSON:
         {"type": "total",    "total": int}
-        {"type": "progress", "idx": int, "total": int, "found": int}
-        {"type": "match",    "idx": int, "total": int, "usuario": {...}}
+        {"type": "usuario",  "idx": int, "total": int, "usuario": {...}, "cached": bool}
         {"type": "error",    "idx": int, "msg": str}
-        {"type": "done",     "total_found": int}
+        {"type": "done",     "total": int, "from_cache": int, "refreshed": int, "stale": int}
     """
     cl = sessions.get(session_id)
     if not cl:
         raise HTTPException(status_code=401, detail="Sesión no válida o expirada")
+
+    metrics_ttl = 0 if refresh else settings.METRICS_TTL_DAYS
 
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_event_loop()
@@ -168,7 +174,8 @@ async def seguidores_stream(
             obtener_usuarios(
                 cl, modo, on_progress,
                 target_user_id=target_uid,
-                session=db, ttl_days=settings.CACHE_TTL_DAYS,
+                target_username=target_username,
+                session=db, metrics_ttl_days=metrics_ttl,
             )
         except Exception as e:
             if db is not None:
@@ -576,6 +583,64 @@ def api_check_session(session_id: str = Query(...)):
     if session_id not in sessions:
         raise HTTPException(status_code=401, detail="Sesión no válida o expirada")
     return {"ok": True, "username": getattr(sessions[session_id], "username", None)}
+
+
+def _history_owner(session_id: str) -> str:
+    """Dueño de las corridas que puede ver esta sesión.
+
+    Sin sesión viva no hay dueño, y sin dueño no se puede acotar qué corridas
+    son tuyas: se responde 401 antes de tocar la BD.
+    """
+    cl = sessions.get(session_id)
+    if not cl:
+        raise HTTPException(status_code=401, detail="Sesión no válida o expirada")
+    return getattr(cl, "username", None) or ""
+
+
+def _assert_run_owner(db, run_id: int, owner: str) -> None:
+    """404 si la corrida no existe o es de otra cuenta (no se revela cuál)."""
+    if repository.run_owner(db, run_id) != owner:
+        raise HTTPException(status_code=404, detail="Corrida no encontrada")
+
+
+@app.get("/api/history/runs")
+def api_history_runs(session_id: str = Query(...), limit: int = Query(50)):
+    """Corridas de análisis de la sesión, más reciente primero."""
+    owner = _history_owner(session_id)
+    with session_scope() as db:
+        runs = repository.list_runs(db, owner_username=owner, limit=limit)
+        return {"runs": [repository.run_to_dict(r) for r in runs]}
+
+
+@app.get("/api/history/runs/{run_id}")
+def api_history_run_detail(run_id: int, session_id: str = Query(...)):
+    """Miembros de una corrida con los conteos congelados en ese momento."""
+    owner = _history_owner(session_id)
+    with session_scope() as db:
+        _assert_run_owner(db, run_id, owner)
+        run = repository.get_run(db, run_id)
+        members = [repository.member_to_dict(m)
+                   for m in sorted(run.members, key=lambda m: m.position)]
+        return {"run": repository.run_to_dict(run), "miembros": members}
+
+
+@app.get("/api/history/diff")
+def api_history_diff(
+    session_id: str = Query(...),
+    base: int = Query(...),
+    compare: int = Query(...),
+):
+    """Quién apareció y quién se fue entre dos corridas del mismo tipo/objetivo."""
+    owner = _history_owner(session_id)
+    with session_scope() as db:
+        _assert_run_owner(db, base, owner)
+        _assert_run_owner(db, compare, owner)
+        try:
+            return repository.diff_runs(db, base, compare)
+        except repository.IncompatibleRuns as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.get("/api/history/users")

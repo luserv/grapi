@@ -15,14 +15,21 @@ except Exception:
 class Settings:
     # Conexión a Postgres. Driver psycopg3 (sync).
     # En Docker, el host es "db" (nombre del servicio de docker-compose).
+    # Fuera de Docker el default apunta a `localhost:11`, que es el puerto que
+    # publica el propio docker-compose.yml — no al 5432 habitual, que acá no
+    # existe. Sobrecribir con DATABASE_URL si tu Postgres vive en otro lado.
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
-        "postgresql+psycopg://iguser:igpass@localhost:5432/igdb",
+        "postgresql+psycopg://iguser:igpass@localhost:11/igdb",
     )
 
-    # Cuántos días vale un perfil cacheado antes de re-consultarlo a Instagram.
-    # Subilo para ahorrar más requests; bajalo para datos más frescos.
-    CACHE_TTL_DAYS: int = int(os.getenv("CACHE_TTL_DAYS", "7"))
+    # Días que un perfil cacheado aguanta con sus contadores frescos.
+    # SOLO aplica a los contadores (follower/following/media): la identidad
+    # (username, full_name, badges, fotos) se relee del listado de
+    # following/followers en cada análisis, así que nunca queda vieja.
+    # Subilo = menos requests pero números más viejos. Bajalo = números al día
+    # a costa de un request por usuario.
+    METRICS_TTL_DAYS: int = int(os.getenv("METRICS_TTL_DAYS", "180"))
 
     # En la descarga masiva de galerías, cada cuántas horas se vuelve a bajar
     # un usuario ya descargado. Default 24h porque las historias caducan a

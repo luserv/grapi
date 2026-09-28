@@ -36,9 +36,3 @@ def session_scope() -> Session:
         raise
     finally:
         session.close()
-
-
-def get_session():
-    """Dependencia de FastAPI: una sesión por request."""
-    with session_scope() as session:
-        yield session

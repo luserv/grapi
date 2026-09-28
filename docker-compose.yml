@@ -22,7 +22,7 @@ services:
     restart: on-failure
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-iguser}:${POSTGRES_PASSWORD:-igpass}@db:5432/${POSTGRES_DB:-igdb}
-      CACHE_TTL_DAYS: "${CACHE_TTL_DAYS:-7}"
+      METRICS_TTL_DAYS: "${METRICS_TTL_DAYS:-180}"
       GALLERY_TTL_HOURS: "${GALLERY_TTL_HOURS:-24}"
       DOWNLOADS_DIR: /data/downloads
       SESSIONS_DIR: /data/sessions

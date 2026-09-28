@@ -53,3 +53,7 @@ Thumbs.db
 
 
 ./.claude/
+
+# ── Índices de herramientas ─────────────────────────────────────────
+.codegraph/
+.playwright-mcp/

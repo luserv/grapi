@@ -4,7 +4,7 @@ Toda la lógica SQL vive acá para mantener instagram.py / main.py limpios.
 """
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update, delete, func as sql_func, or_
+from sqlalchemy import select, update, func as sql_func, or_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
@@ -13,25 +13,58 @@ from models import AnalysisRun, InstagramUser, RunMember
 
 # ── Caché de perfiles ────────────────────────────────────────────────
 
-def get_cached_user(session: Session, pk: int, ttl_days: int) -> InstagramUser | None:
-    """Devuelve el perfil cacheado si existe y es más nuevo que ttl_days; si no, None."""
-    user = session.get(InstagramUser, pk)
-    if user is None:
-        return None
+def get_cached_user(session: Session, pk: int) -> InstagramUser | None:
+    """El perfil cacheado de `pk`, o None si nunca lo vimos.
+
+    La fila NO tiene vencimiento: mientras exista, la identidad (username,
+    full_name, badges) es conocida. Solo los contadores se vencen, y eso lo
+    decide `metrics_are_fresh`.
+    """
+    return session.get(InstagramUser, pk)
+
+
+def metrics_are_fresh(user: InstagramUser, ttl_days: int) -> bool:
+    """¿Los contadores de `user` son más nuevos que ttl_days?
+
+    ttl_days <= 0 fuerza el refresco (modo explícito "dame números frescos").
+    """
+    if ttl_days <= 0:
+        return False
+    if user.metrics_fetched_at is None:
+        return False
     cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
-    if user.last_fetched_at and user.last_fetched_at >= cutoff:
-        return user
-    return None  # existe pero está vencido → re-consultar
+    return user.metrics_fetched_at >= cutoff
 
 
 def upsert_user(session: Session, data: dict) -> InstagramUser:
-    """Inserta o actualiza un perfil y marca last_fetched_at = ahora.
+    """Inserta o actualiza un perfil y marca las dos fechas a ahora.
+
+    `data["metrics_fresh"]` decide si además se renueva `metrics_fetched_at`.
+    Va en False para actualizaciones de identidad que no trajeron contadores
+    frescos del listado, para no mentirle al TTL.
 
     Usa INSERT … ON CONFLICT DO UPDATE (PostgreSQL) para evitar race
     conditions cuando dos hilos intentan insertar el mismo pk.
     """
     now = datetime.now(timezone.utc)
+    metrics_fresh = bool(data.get("metrics_fresh", True))
     table = InstagramUser.__table__
+
+    update_set = {
+        "username": data["username"],
+        "full_name": data.get("full_name"),
+        "biography": data.get("biography") or "",
+        "follower_count": data["follower_count"],
+        "following_count": data["following_count"],
+        "media_count": data["media_count"],
+        "is_verified": data["is_verified"],
+        "is_private": data["is_private"],
+        "profile_pic_url": data.get("profile_pic_url"),
+        "profile_pic_url_hd": data.get("profile_pic_url_hd"),
+        "last_fetched_at": now,
+    }
+    if metrics_fresh:
+        update_set["metrics_fetched_at"] = now
 
     stmt = (
         pg_insert(table)
@@ -49,22 +82,11 @@ def upsert_user(session: Session, data: dict) -> InstagramUser:
             profile_pic_url_hd=data.get("profile_pic_url_hd"),
             first_seen_at=now,
             last_fetched_at=now,
+            metrics_fetched_at=now if metrics_fresh else None,
         )
         .on_conflict_do_update(
             index_elements=[table.c.pk],
-            set_={
-                "username": data["username"],
-                "full_name": data.get("full_name"),
-                "biography": data.get("biography") or "",
-                "follower_count": data["follower_count"],
-                "following_count": data["following_count"],
-                "media_count": data["media_count"],
-                "is_verified": data["is_verified"],
-                "is_private": data["is_private"],
-                "profile_pic_url": data.get("profile_pic_url"),
-                "profile_pic_url_hd": data.get("profile_pic_url_hd"),
-                "last_fetched_at": now,
-            },
+            set_=update_set,
         )
     )
     session.execute(stmt)
@@ -129,14 +151,13 @@ def create_run(
     target_username: str | None,
     target_user_id: str | None,
 ) -> AnalysisRun:
-    """Crea una corrida nueva. Si ya existe una para el mismo owner+modo+target,
-    la reusa (no duplica registros)."""
-    existing = _find_existing_run(session, owner_username, modo, target_username)
-    if existing is not None:
-        existing.target_user_id = target_user_id
-        existing.created_at = datetime.now(timezone.utc)
-        session.flush()
-        return existing
+    """Crea una corrida nueva. Siempre una, nunca reusa.
+
+    No se busca una previa del mismo (owner, modo, target): `diff_runs` exige
+    que las dos corridas a comparar compartan modo + target_username, así que
+    reusar haría imposible tener un par comparable y el historial nunca
+    podría mostrar un diff. Acumulá corridas y compará las que quieras.
+    """
     run = AnalysisRun(
         owner_username=owner_username,
         modo=modo,
@@ -148,52 +169,42 @@ def create_run(
     return run
 
 
-def _find_existing_run(
-    session: Session,
-    owner_username: str,
-    modo: str,
-    target_username: str | None,
-) -> AnalysisRun | None:
-    stmt = (
-        select(AnalysisRun)
-        .where(AnalysisRun.owner_username == owner_username)
-        .where(AnalysisRun.modo == modo)
-        .where(AnalysisRun.target_username == target_username)
-        .order_by(AnalysisRun.created_at.desc())
-        .limit(1)
-    )
-    return session.scalars(stmt).first()
+def add_member(session: Session, run_id: int, data: dict, position: int) -> None:
+    """Inserta el miembro en la corrida, congelando el perfil de `data`.
 
+    Toma el **dict**, no el objeto `InstagramUser`, a propósito. `upsert_user`
+    escribe con `INSERT ... ON CONFLICT DO UPDATE`, que es SQL crudo: el
+    identity map del ORM no se entera y `session.get()` devuelve el objeto con
+    los atributos de ANTES del refresco. Como `add_member` se llama justo
+    después de un refresco de contadores, leer del ORM congelaría el valor
+    viejo en el historial — la misma mentira que acabamos de eliminar de
+    `RunMember`, entering por otra puerta. El dict es lo que esta corrida vio.
 
-def reset_run_members(session: Session, run_id: int) -> None:
-    """Elimina todos los miembros de una corrida (para reemplazarlos)."""
-    session.execute(
-        delete(RunMember).where(RunMember.run_id == run_id)
-    )
-    session.flush()
-
-
-def add_member(session: Session, run_id: int, user: InstagramUser, position: int) -> None:
-    """Inserta el miembro en la corrida de forma idempotente.
-
-    Si la misma (run_id, user_pk) ya existe —p. ej. porque el EventSource del
-    front se reconectó y hay dos run_fetch escribiendo el mismo run a la vez—
-    se actualiza la fila en lugar de violar uq_run_user. Usa el upsert nativo
-    de Postgres (ON CONFLICT DO UPDATE)."""
+    Idempotente: si la misma (run_id, user_pk) ya existe se actualiza en vez de
+    violar `uq_run_user`, así que reintentar un usuario nunca rompe la corrida.
+    """
     stmt = pg_insert(RunMember).values(
         run_id=run_id,
-        user_pk=user.pk,
+        user_pk=data["pk"],
         position=position,
-        follower_count=user.follower_count,
-        following_count=user.following_count,
-        media_count=user.media_count,
+        username=data["username"],
+        full_name=data.get("full_name"),
+        is_verified=bool(data.get("is_verified")),
+        is_private=bool(data.get("is_private")),
+        follower_count=data["follower_count"],
+        following_count=data["following_count"],
+        media_count=data["media_count"],
     ).on_conflict_do_update(
         constraint="uq_run_user",
         set_=dict(
             position=position,
-            follower_count=user.follower_count,
-            following_count=user.following_count,
-            media_count=user.media_count,
+            username=data["username"],
+            full_name=data.get("full_name"),
+            is_verified=bool(data.get("is_verified")),
+            is_private=bool(data.get("is_private")),
+            follower_count=data["follower_count"],
+            following_count=data["following_count"],
+            media_count=data["media_count"],
         ),
     )
     session.execute(stmt)
@@ -218,18 +229,51 @@ def get_run(session: Session, run_id: int) -> AnalysisRun | None:
     stmt = (
         select(AnalysisRun)
         .where(AnalysisRun.id == run_id)
-        .options(selectinload(AnalysisRun.members).selectinload(RunMember.user))
+        .options(selectinload(AnalysisRun.members))
     )
     return session.scalars(stmt).first()
 
 
+def run_owner(session: Session, run_id: int) -> str | None:
+    """Dueño de la corrida, o None si no existe. Los endpoints de historial
+    lo usan para no exponer corridas de otra cuenta."""
+    run = session.get(AnalysisRun, run_id)
+    return run.owner_username if run else None
+
+
+def run_to_dict(run: AnalysisRun) -> dict:
+    """Forma el dict que consume el frontend desde una fila de analysis_runs."""
+    return {
+        "id": run.id,
+        "modo": run.modo,
+        "target_username": run.target_username,
+        "total": run.total,
+        "from_cache": run.from_cache,
+        "created_at": run.created_at,
+    }
+
+
+def member_to_dict(member: RunMember) -> dict:
+    """Snapshot del miembro de una corrida.
+
+    Todo sale de `run_members`: identidad, badges y conteos congelados en el
+    momento del análisis. Nada se lee de `instagram_users` — mostrar el valor
+    actual haría inútil la comparación entre corridas.
+    """
+    return {
+        "username": member.username,
+        "full_name": member.full_name,
+        "follower_count": member.follower_count,
+        "following_count": member.following_count,
+        "media_count": member.media_count,
+        "is_verified": member.is_verified,
+        "is_private": member.is_private,
+    }
+
+
 def _run_usernames(session: Session, run_id: int) -> dict[str, RunMember]:
-    stmt = (
-        select(RunMember)
-        .where(RunMember.run_id == run_id)
-        .options(selectinload(RunMember.user))
-    )
-    return {m.user.username: m for m in session.scalars(stmt).all()}
+    stmt = select(RunMember).where(RunMember.run_id == run_id)
+    return {m.username: m for m in session.scalars(stmt).all()}
 
 
 class IncompatibleRuns(ValueError):
