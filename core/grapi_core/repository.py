@@ -5,10 +5,10 @@ Toda la lógica SQL vive acá para mantener instagram.py / main.py limpios.
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update, func as sql_func, or_
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import insert
 from sqlalchemy.orm import Session, selectinload
 
-from models import AnalysisRun, InstagramUser, RunMember
+from grapi_core.models import AnalysisRun, InstagramUser, RunMember
 
 
 # ── Caché de perfiles ────────────────────────────────────────────────

@@ -95,6 +95,7 @@ def obtener_usuarios(
     target_username: str = None,
     session=None,
     metrics_ttl_days: int = 180,
+    repository=None,
 ) -> list[dict]:
     """
     Obtiene todos los usuarios (following o followers) sin filtrar.
@@ -115,10 +116,10 @@ def obtener_usuarios(
         {"type": "error",   "idx": int, "msg": str}
         {"type": "done",    "total": int, "from_cache": int, "refreshed": int, "stale": int}
     """
-    # Import local para que el CLI / usos sin DB no dependan de SQLAlchemy.
-    repository = None
-    if session is not None:
-        import repository as repository
+    # Use passed repository, or import from grapi_core if available for testability.
+    # Si no se pasa repository explícito y hay sesión, intentamos importarlo.
+    if repository is None and session is not None:
+        import grapi_core.repository as repository
 
     user_id = target_user_id if target_user_id else cl.user_id
     if modo == "followers":

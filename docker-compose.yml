@@ -1,45 +1,25 @@
 services:
-  # ── Base de datos (caché de perfiles) ──────────────────────────────
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-iguser}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-igpass}
-      POSTGRES_DB: ${POSTGRES_DB:-igdb}
-    ports:
-      - "11:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-iguser} -d ${POSTGRES_DB:-igdb}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   # ── Backend (FastAPI) ───────────────────────────────────────────────
   backend:
-    build: ./backend
+    build: ./docker/api
     restart: on-failure
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-iguser}:${POSTGRES_PASSWORD:-igpass}@db:5432/${POSTGRES_DB:-igdb}
+      DATABASE_URL: sqlite:///./data/app.db
       METRICS_TTL_DAYS: "${METRICS_TTL_DAYS:-180}"
       GALLERY_TTL_HOURS: "${GALLERY_TTL_HOURS:-24}"
       DOWNLOADS_DIR: /data/downloads
       SESSIONS_DIR: /data/sessions
-    command: sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "12:8000"
-    depends_on:
-      db:
-        condition: service_healthy
     volumes:
-      - ./backend:/app
-      - ./backend/downloads:/data/downloads
-      - ./backend/sessions:/data/sessions
+      - ./docker/api:/app
+      - ./docker/api/downloads:/data/downloads
+      - ./docker/api/sessions:/data/sessions
     develop:
       watch:
         - action: sync
-          path: ./backend
+          path: ./docker/api
           target: /app
           ignore:
             - __pycache__/
@@ -49,7 +29,7 @@ services:
             - env/
             - .venv/
         - action: rebuild
-          path: ./backend/requirements.txt
+          path: ./docker/api/requirements.txt
 
   # ── Frontend (Next.js dev server) ─────────────────────────────────
   frontend:

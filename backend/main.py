@@ -15,12 +15,12 @@ from fastapi.responses import StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-import repository
-from config import settings
-from database import SessionLocal, session_scope
-from instagram import autenticar_instagram, obtener_usuarios
+from grapi_core import repository
+from grapi_core.config import settings
+from grapi_core.database import SessionLocal, session_scope
+from grapi_core.instagram import autenticar_instagram, obtener_usuarios
 from instagrapi.exceptions import ChallengeRequired, LoginRequired, TwoFactorRequired
-import downloader
+from grapi_core import downloader
 
 app = FastAPI(title="Instagram Followers Analyzer")
 

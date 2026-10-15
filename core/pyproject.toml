@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "grapi-core"
+version = "0.1.0"
+description = "Instagram follower/following analyzer core library"
+
+[project.dependencies]
+instagrapi = "^2.30.0"
+sqlalchemy = "^2.0.0"
+requests = "^2.31.0"
+python-dotenv = "^1.0.0"
+
+[tool.setuptools.packages.find]
+where = ["core/grapi_core"]

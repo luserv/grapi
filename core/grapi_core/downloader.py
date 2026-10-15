@@ -11,9 +11,10 @@ import requests
 from instagrapi import Client
 from instagrapi.exceptions import LoginRequired, ClientError, RateLimitError
 
-from config import settings
+from grapi_core.config import settings
 
 BASE_DIR = Path(settings.DOWNLOADS_DIR)
+
 
 
 def _user_dir(username):
