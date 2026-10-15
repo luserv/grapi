@@ -57,3 +57,14 @@ Thumbs.db
 # ── Índices de herramientas ─────────────────────────────────────────
 .codegraph/
 .playwright-mcp/
+
+# ── Tauri / build outputs ───────────────────────────────────────────
+src-tauri/target/
+src-tauri/gen/
+app/out/
+app/.next/
+app/next-env.d.ts
+build/
+dist/
+src-tauri/binaries/grapi-api-*
+*.tsbuildinfo

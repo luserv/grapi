@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from grapi_core import repository
+from grapi_core import repository, settings_store
 from grapi_core.config import settings
 from grapi_core.database import SessionLocal, session_scope
 from grapi_core.instagram import autenticar_instagram, obtener_usuarios
@@ -26,10 +26,58 @@ app = FastAPI(title="Instagram Followers Analyzer")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+    ],
+    # Dev servers and any localhost/127.0.0.1 port (Next dev, docker frontend).
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/api/health")
+def health():
+    """Liveness probe used by the desktop shell to know the sidecar is up."""
+    return {"status": "ok"}
+
+
+class SettingsUpdate(BaseModel):
+    downloads_dir: str
+
+
+@app.get("/api/settings")
+def get_app_settings():
+    return {"downloads_dir": str(Path(settings.DOWNLOADS_DIR).resolve())}
+
+
+@app.put("/api/settings")
+def update_app_settings(req: SettingsUpdate):
+    """Change the downloads folder. Existing files are NOT moved."""
+    raw = req.downloads_dir.strip()
+    target = Path(raw).expanduser() if raw else None
+    if target is None or not target.is_absolute():
+        raise HTTPException(status_code=400, detail="La ruta debe ser absoluta (ej. /home/usuario/descargas).")
+    if any(j["state"]["status"] == "running" for j in bulk_jobs.values()):
+        raise HTTPException(status_code=409, detail="Hay una descarga masiva en curso. Esperá a que termine o cancelala.")
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        probe = target / f".grapi_write_test_{uuid.uuid4().hex}"
+        probe.write_text("ok")
+        probe.unlink()
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"No se puede escribir en esa carpeta: {e.strerror or e}")
+    resolved = target.resolve()
+    data = settings_store.load()
+    data["downloads_dir"] = str(resolved)
+    try:
+        settings_store.save(data)
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"No se pudo guardar la configuración: {e.strerror or e}")
+    settings.DOWNLOADS_DIR = str(resolved)
+    return {"downloads_dir": str(resolved)}
+
 
 # Sesiones activas: session_id -> Client
 sessions: dict[str, object] = {}
@@ -662,7 +710,7 @@ def downloads_pending():
     """Cruza instagram_users (caché local) contra el directorio de descargas.
     Devuelve quién tiene contenido, quién no, y el conteo de archivos.
     No hace ningún request a Instagram."""
-    downloads_base = Path(settings.DOWNLOADS_DIR)
+    downloads_base = downloader.base_dir()
 
     with session_scope() as db:
         users = repository.search_users(db, q="", limit=10_000)
@@ -715,13 +763,13 @@ def api_user_downloads(username: str):
 
 @app.get("/api/downloads/{username}/files/{filename:path}")
 def api_serve_download(username: str, filename: str):
-    filepath = downloader.BASE_DIR / username / filename
+    filepath = downloader.base_dir() / username / filename
     if not filepath.exists():
-        filepath = downloader.BASE_DIR / username / "gallery" / filename
+        filepath = downloader.base_dir() / username / "gallery" / filename
     if not filepath.exists():
-        filepath = downloader.BASE_DIR / username / "stories" / filename
+        filepath = downloader.base_dir() / username / "stories" / filename
     if not filepath.exists():
-        filepath = downloader.BASE_DIR / username / "highlights" / filename
+        filepath = downloader.base_dir() / username / "highlights" / filename
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
     from fastapi.responses import FileResponse

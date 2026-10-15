@@ -58,6 +58,18 @@ class Settings:
 
 settings = Settings()
 
+# A folder chosen from the UI (settings.json) overrides the env/default value.
+from grapi_core import settings_store  # noqa: E402
+
+_saved_dir = settings_store.load().get("downloads_dir")
+if isinstance(_saved_dir, str) and Path(_saved_dir).is_absolute():
+    settings.DOWNLOADS_DIR = _saved_dir
+
 # Garantizar que los directorios persistentes existan al arrancar.
-Path(settings.DOWNLOADS_DIR).mkdir(parents=True, exist_ok=True)
+try:
+    Path(settings.DOWNLOADS_DIR).mkdir(parents=True, exist_ok=True)
+except OSError:
+    # Saved folder no longer usable (unmounted drive...): fall back to the env/default one.
+    settings.DOWNLOADS_DIR = Settings.DOWNLOADS_DIR
+    Path(settings.DOWNLOADS_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.SESSIONS_DIR).mkdir(parents=True, exist_ok=True)

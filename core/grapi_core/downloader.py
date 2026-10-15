@@ -13,12 +13,14 @@ from instagrapi.exceptions import LoginRequired, ClientError, RateLimitError
 
 from grapi_core.config import settings
 
-BASE_DIR = Path(settings.DOWNLOADS_DIR)
+def base_dir() -> Path:
+    """Current downloads root. Resolved on every call so the UI can change it at runtime."""
+    return Path(settings.DOWNLOADS_DIR)
 
 
 
 def _user_dir(username):
-    return BASE_DIR / username
+    return base_dir() / username
 
 
 def _media_dir(username, media_type):
@@ -57,7 +59,7 @@ def _save_metadata(username, metadata):
 
 def _update_index(username):
     meta = _load_metadata(username)
-    index_path = BASE_DIR / "index.json"
+    index_path = base_dir() / "index.json"
     if index_path.exists():
         idx = json.loads(index_path.read_text())
     else:
@@ -454,7 +456,7 @@ def download_user(cl, username, user_id=None, on_progress: Callable = None, shou
 
 
 def list_downloads():
-    index_path = BASE_DIR / "index.json"
+    index_path = base_dir() / "index.json"
     if index_path.exists():
         return json.loads(index_path.read_text())
     return {}
@@ -607,7 +609,7 @@ def download_many(cl, users, on_progress: Callable = None, ttl_hours: int = 24,
 
 
 def _profiles_index_path():
-    return BASE_DIR / "profiles_index.json"
+    return base_dir() / "profiles_index.json"
 
 
 def _load_profiles_index():
