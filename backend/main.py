@@ -3,6 +3,7 @@ API REST con FastAPI para el analizador de seguidores de Instagram.
 """
 import asyncio
 import json
+import logging
 import threading
 import uuid
 import requests as req_lib
@@ -17,7 +18,7 @@ from pydantic import BaseModel
 
 from grapi_core import repository, settings_store
 from grapi_core.config import settings
-from grapi_core.database import SessionLocal, session_scope
+from grapi_core.database import SessionLocal, init_db, session_scope
 from grapi_core.instagram import autenticar_instagram, obtener_usuarios
 from instagrapi.exceptions import ChallengeRequired, LoginRequired, TwoFactorRequired
 from grapi_core import downloader
@@ -81,6 +82,17 @@ def update_app_settings(req: SettingsUpdate):
 
 # Sesiones activas: session_id -> Client
 sessions: dict[str, object] = {}
+
+
+@app.on_event("startup")
+def create_tables():
+    """Create the DB tables if missing. The DB is optional at runtime: if it
+    is unreachable (e.g. Postgres default with nothing listening), degrade to
+    no-cache/no-history instead of failing to start."""
+    try:
+        init_db()
+    except Exception as e:
+        logging.getLogger("uvicorn.error").warning("DB init skipped: %s", e)
 
 
 @app.on_event("startup")

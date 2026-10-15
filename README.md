@@ -2,59 +2,95 @@
 
 Analizador de seguidores/seguidos de Instagram con descarga de galerías e historias.
 
-**Stack**: FastAPI + PostgreSQL · Next.js 15 · instagrapi
+**Stack**: FastAPI + SQLite (Postgres opcional) · Next.js 15 · instagrapi · Tauri 2 (app de escritorio)
+
+## Estructura del repo
+
+| Ruta | Contenido |
+|---|---|
+| `core/grapi_core/` | Lógica compartida: config, base de datos, repositorio, Instagram, descargas |
+| `backend/` | App FastAPI (`main.py`) y `serve.py`, el entrypoint del sidecar de escritorio |
+| `app/` | Frontend de la app de escritorio (Next.js, export estático) |
+| `src-tauri/` | Shell de Tauri (Rust) que empaqueta el AppImage |
+| `docker/api/`, `docker/web/frontend/` | Dockerfile del backend (contexto: raíz del repo) y frontend web para Docker |
+| `main.py` | Script CLI |
 
 ---
 
 ## Levantar el proyecto
 
-### Opción A — Docker (recomendada, un solo comando)
+### Opción A — Docker
 
 ```bash
-cp .env.example .env          # ajustá credenciales si querés; los defaults funcionan
+cp .env.example .env          # opcional; los defaults funcionan
 docker compose up --build
 ```
 
 | Servicio   | URL                        | Rol |
 |------------|----------------------------|-----|
 | Frontend   | http://localhost:14        | Next.js (dev server con hot-reload) |
-| Backend    | http://localhost:12        | FastAPI; corre `alembic upgrade head` al arrancar |
-| Postgres   | localhost:11               | Caché de perfiles e historial de corridas |
+| Backend    | http://localhost:12        | FastAPI; crea las tablas SQLite al arrancar |
 
-Son **tres** servicios. No hay pgAdmin: para mirar la base, `docker compose exec db psql -U iguser -d igdb`.
+Son **dos** servicios. No hay Postgres, ni Alembic, ni pgAdmin: la caché y el historial viven en un archivo SQLite (`data/db/app.db`).
 
-El frontend habla con el backend por paths relativos (`/api/...`) a través de un rewrite de Next.js, así que no hay que configurar ninguna URL de API en el cliente.
+El frontend habla con el backend por paths relativos (`/api/...`) a través de un rewrite de Next.js que lee `BACKEND_URL` en **runtime** (compose lo setea a `http://backend:8000`), así que no hay que configurar ninguna URL de API en el cliente.
+
+Los datos persisten en `./data/` (ignorado por git, creado por Docker como root): `db/app.db`, `sessions/` y `downloads/`.
 
 > **El `.env` no está montado en los containers.** Compose lo lee al *crear* cada contenedor. Si cambiás una variable, recreá el servicio: `docker compose up -d --force-recreate backend`. Con un `docker restart` no alcanza.
 
-Con `docker compose watch` (Docker Desktop o CLI ≥ 2.22) los cambios en `frontend/` y `backend/` se sincronizan sin rebuild.
+El código de `backend/`, `core/` y `docker/web/frontend/{app,components,lib}` está montado en los contenedores: los cambios se recargan solos, sin rebuild. Si cambiás `backend/requirements.txt` o `package.json`, reconstruí con `docker compose up --build`.
 
 ### Opción B — local sin Docker
 
-**Requisitos:** Python 3.11+, Node 20+, PostgreSQL 15+ (o solo el contenedor de DB)
+**Requisitos:** Python 3.11+, Node 20+
 
 ```bash
-# 1. Solo la DB en Docker (opcional pero conveniente)
-docker compose up -d db
-
-# 2. Backend
-cd backend
+# 1. Backend (desde la raíz del repo)
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-alembic upgrade head                                # crea/migra las tablas
+pip install -r backend/requirements.txt
+export PYTHONPATH=$PWD/core                         # para que resuelva `grapi_core`
+export DATABASE_URL=sqlite:///$PWD/data/app.db      # sin esto el default es Postgres en localhost:11
+cd backend
 uvicorn main:app --reload                           # http://localhost:8000
 
-# 3. Frontend (en otra terminal)
-cd frontend
+# 2. Frontend (en otra terminal)
+cd docker/web/frontend
 npm install
 npm run dev                                         # http://localhost:5174
 ```
 
-El backend local no necesita que le apuntes la base a mano: el default de `config.py` ya va a `localhost:11`, que es el puerto que publica el compose. Solo tocá `DATABASE_URL` en `.env` si tu Postgres vive en otro lado.
+(En fish: `set -x PYTHONPATH $PWD/core`, `set -x DATABASE_URL sqlite:///$PWD/data/app.db` y `source .venv/bin/activate.fish`.)
+
+Las tablas se crean solas al arrancar. La base es **opcional**: si no está disponible, el backend degrada a sin caché/sin historial en vez de fallar. Sesiones y descargas van por defecto a `core/grapi_core/` (`SESSIONS_DIR` / `DOWNLOADS_DIR` lo cambian).
 
 > ⚠️ `uvicorn --reload` reinicia el proceso en cada guardado del backend, lo que **borra las sesiones en memoria**. Tenés que volver a iniciar sesión después de cada cambio.
 
-Postgres es **opcional**: si no está disponible, el backend degrada a sin caché/sin historial en vez de fallar.
+### Opción C — App de escritorio (AppImage, Linux)
+
+Un solo ejecutable: ventana de Tauri + backend FastAPI empaquetado con PyInstaller (sidecar) + frontend estático.
+
+**Requisitos:** Rust y `cargo-tauri` v2, Node 20+, un venv `env/` con las dependencias del backend y `pyinstaller`.
+
+```bash
+NO_STRIP=true cargo tauri build --bundles appimage
+```
+
+`NO_STRIP=true` hace falta en Arch (el `strip` de linuxdeploy falla). El build reconstruye el sidecar (`build-sidecar.sh`, ~50 s) y el frontend (`app/`) cada vez. Resultado:
+
+```
+src-tauri/target/release/bundle/appimage/grapi_0.1.0_amd64.AppImage
+```
+
+```bash
+APPIMAGE_EXTRACT_AND_RUN=1 ./src-tauri/target/release/bundle/appimage/grapi_0.1.0_amd64.AppImage
+```
+
+- El sidecar escucha en `127.0.0.1:8765` (`GRAPI_PORT` lo cambia). La ventana se muestra cuando `/api/health` responde.
+- Si la base no está disponible, el backend degrada a sin caché/sin historial.
+- **Datos** en `~/.local/share/dev.grapi.desktop/`: `sessions/`, `downloads/` y `settings.json`.
+- **Carpeta de descargas configurable**: en la pestaña *Descargas* se ve la ruta actual y el botón **Cambiar carpeta** abre un selector nativo. Se guarda en `settings.json` y rige para las descargas nuevas; **lo ya descargado no se mueve**. No se puede cambiar mientras corre una descarga masiva.
+- Para desarrollar el frontend de escritorio: `cd app && npm install && npm run build` (genera `app/out`). La URL de la API sale de `NEXT_PUBLIC_API_BASE` (default `http://127.0.0.1:8765`).
 
 ---
 
@@ -64,10 +100,7 @@ Copiá `.env.example` a `.env`. Los valores por defecto levantan todo sin cambio
 
 | Variable | Default | Descripción |
 |---|---|---|
-| `POSTGRES_USER` | `iguser` | Usuario de Postgres |
-| `POSTGRES_PASSWORD` | `igpass` | Contraseña de Postgres |
-| `POSTGRES_DB` | `igdb` | Nombre de la base |
-| `DATABASE_URL` | `localhost:11` | Solo si tu Postgres está en otro lado |
+| `DATABASE_URL` | Docker: `sqlite:////data/db/app.db` | URL de SQLAlchemy. Para Postgres: `postgresql+psycopg://user:pass@host:puerto/db` (tu propio servidor; no hay servicio `db`) |
 | `METRICS_TTL_DAYS` | `180` | Días que los contadores de un perfil se consideran frescos (semestral) |
 | `GALLERY_TTL_HOURS` | `24` | Cooldown entre descargas del mismo usuario |
 | `ECHO_SQL` | `0` | Loguear SQL (debug) |
@@ -120,9 +153,10 @@ python jobs_cli.py --cancel <job_id>
 
 ## Autenticación
 
-- Al iniciar sesión se guarda `backend/sessions/session_<usuario>.json` y se reutiliza en el próximo arranque del servidor sin pedir contraseña.
+- Al iniciar sesión se guarda `session_<usuario>.json` en `SESSIONS_DIR` (Docker: `data/sessions/`) y se reutiliza en el próximo arranque del servidor sin pedir contraseña.
 - Si tenés **2FA**, se solicita el código al loguear.
 - Si Instagram pide verificación adicional (**Challenge**), aprobala desde la app móvil y reintentá.
+- Si aparece *"Your version of Instagram is out of date"*: `instagrapi` se está identificando con una versión vieja de la app. Actualizalo (`pip install -U instagrapi`; con 3.0.25 funciona la versión `449.x`) y **reconstruí** el AppImage o la imagen de Docker, porque cada uno trae su propia copia. Si una cuenta guardada sigue fallando, borrá su `session_<usuario>.json` para forzar un login limpio.
 
 ---
 
@@ -157,6 +191,9 @@ Pide usuario y contraseña, lista los seguidos con más de 1000 seguidores y exp
 
 | Ruta | Contenido |
 |---|---|
-| `backend/sessions/session_*.json` | Sesiones de Instagram (credenciales — nunca commitear) |
-| `backend/downloads/` | Galerías, historias, `metadata.json`, `index.json` |
-| `.env` | Variables de entorno con credenciales de DB |
+| `data/sessions/session_*.json` (Docker) | Sesiones de Instagram (credenciales — nunca commitear) |
+| `data/downloads/` (Docker) | Galerías, historias, `metadata.json`, `index.json` |
+| `~/.local/share/dev.grapi.desktop/` | Datos de la app de escritorio: sesiones, descargas, `settings.json` |
+| `src-tauri/target/`, `src-tauri/binaries/`, `app/out/`, `build/`, `dist/` | Artefactos de build (ignorados) |
+| `data/db/app.db` | Base SQLite de la caché y el historial (Docker) |
+| `.env` | Variables de entorno |

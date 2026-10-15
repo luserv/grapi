@@ -1,0 +1,7 @@
+# Backend image context is the repo root: send only what the image needs.
+*
+!backend/*.py
+!backend/requirements.txt
+!core/grapi_core/
+**/__pycache__
+**/*.pyc

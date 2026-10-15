@@ -5,10 +5,22 @@ Toda la lógica SQL vive acá para mantener instagram.py / main.py limpios.
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update, func as sql_func, or_
-from sqlalchemy import insert
+from sqlalchemy.dialects.postgresql import insert as _pg_insert
+from sqlalchemy.dialects.sqlite import insert as _sqlite_insert
 from sqlalchemy.orm import Session, selectinload
 
 from grapi_core.models import AnalysisRun, InstagramUser, RunMember
+
+
+def _upsert_insert(session: Session, table):
+    """INSERT con ON CONFLICT para el dialecto en uso (PostgreSQL o SQLite).
+
+    Ambos exponen `on_conflict_do_update(index_elements=...)`, así que el resto
+    del código no distingue de qué base viene la sesión.
+    """
+    if session.get_bind().dialect.name == "sqlite":
+        return _sqlite_insert(table)
+    return _pg_insert(table)
 
 
 # ── Caché de perfiles ────────────────────────────────────────────────
@@ -33,7 +45,11 @@ def metrics_are_fresh(user: InstagramUser, ttl_days: int) -> bool:
     if user.metrics_fetched_at is None:
         return False
     cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
-    return user.metrics_fetched_at >= cutoff
+    fetched = user.metrics_fetched_at
+    if fetched.tzinfo is None:
+        # SQLite devuelve las fechas sin zona; se guardan siempre en UTC.
+        fetched = fetched.replace(tzinfo=timezone.utc)
+    return fetched >= cutoff
 
 
 def upsert_user(session: Session, data: dict) -> InstagramUser:
@@ -67,7 +83,7 @@ def upsert_user(session: Session, data: dict) -> InstagramUser:
         update_set["metrics_fetched_at"] = now
 
     stmt = (
-        pg_insert(table)
+        _upsert_insert(session, table)
         .values(
             pk=data["pk"],
             username=data["username"],
@@ -183,7 +199,7 @@ def add_member(session: Session, run_id: int, data: dict, position: int) -> None
     Idempotente: si la misma (run_id, user_pk) ya existe se actualiza en vez de
     violar `uq_run_user`, así que reintentar un usuario nunca rompe la corrida.
     """
-    stmt = pg_insert(RunMember).values(
+    stmt = _upsert_insert(session, RunMember.__table__).values(
         run_id=run_id,
         user_pk=data["pk"],
         position=position,
@@ -195,7 +211,7 @@ def add_member(session: Session, run_id: int, data: dict, position: int) -> None
         following_count=data["following_count"],
         media_count=data["media_count"],
     ).on_conflict_do_update(
-        constraint="uq_run_user",
+        index_elements=["run_id", "user_pk"],
         set_=dict(
             position=position,
             username=data["username"],

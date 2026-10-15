@@ -2,6 +2,7 @@
 session.json
 session_*.json
 backend/sessions/
+data/
 
 # ── Descargas locales (galería, historias, índices) ───────────────────
 backend/downloads/
@@ -9,6 +10,8 @@ backend/downloads/
 # ── Resultados exportados ─────────────────────────────────────────────
 *.txt
 *.csv
+# ...but dependency lists are source, not results.
+!requirements.txt
 
 # ── Python ────────────────────────────────────────────────────────────
 __pycache__/
@@ -34,6 +37,7 @@ frontend/node_modules/
 frontend/.next/
 frontend/dist/
 frontend/out/
+docker/web/frontend/.next/
 
 # ── Base de datos local ───────────────────────────────────────────────
 *.db

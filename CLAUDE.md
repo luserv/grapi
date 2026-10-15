@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Instagram follower/following analyzer with two interfaces:
 - **CLI** (`main.py`) — interactive terminal script
-- **Web app** (`backend/` FastAPI + `frontend/` Next.js SPA)
+- **Web app** (`backend/` FastAPI + shared `core/grapi_core/` + `docker/web/frontend/` Next.js SPA)
 
 Written in Spanish (variable names, prompts, comments, docs). There are no tests.
 
@@ -24,37 +24,34 @@ python main.py                       # prompts for username/password
 ### Web app — fully containerized (recommended, one command)
 ```bash
 cp .env.example .env                 # compose reads it for ${VAR} substitution
-docker compose up --build            # db + backend + frontend
+docker compose up --build            # backend + frontend
 ```
-Brings up **three containers**, frontend served by Next.js on **http://localhost:14**:
+Brings up **two containers**, frontend served by Next.js on **http://localhost:14**:
 
 | Service    | Host port | Role |
 |------------|-----------|------|
 | `frontend` | 14 → 3000 | Next.js 15 dev server (Turbopack); proxies `/api/*` → `backend:8000` via `next.config.mjs` rewrites |
-| `backend`  | 12 → 8000 | FastAPI; entrypoint runs `alembic upgrade head` then uvicorn |
-| `db`       | 11 → 5432 | Postgres 16 (cache + history); backend waits on its `healthcheck` |
+| `backend`  | 12 → 8000 | FastAPI (SQLite by default; tables created by `init_db()` on startup). Image built from the repo root (`docker/api/Dockerfile`): `PYTHONPATH=/app/core`, source bind-mounted for `--reload` |
 
-**There is no `pgadmin` service** — the `pgadmin/` directory is leftover config and nothing serves it. Use `docker compose exec db psql -U iguser -d igdb` for DB inspection. (Host port 11 is unusual but intentional; it is what `docker-compose.yml` publishes.)
+**There is no `db` or `pgadmin` service.** Inspect the DB with `docker compose exec backend python -c "import sqlite3; ..."` on `/data/db/app.db`. `DATABASE_URL` pointing at an external Postgres still works (`psycopg` is in `backend/requirements.txt`).
 
 The frontend always uses **same-origin** relative paths (`fetch('/api/...')`) — no API base-URL constant. The Next.js rewrite proxies to `process.env.BACKEND_URL ?? 'http://localhost:8000'`.
 
-> **`BACKEND_URL` must be set at runtime, in `docker-compose.yml` (frontend `environment:`), NOT baked into the image.** The `Dockerfile` declares `ARG BACKEND_URL` only in the *build* stage, so a rebuilt image does not carry it into the runtime stage — the rewrite silently falls back to `localhost:8000` (nothing there) and the whole `/api` proxy breaks. Compose sets it explicitly, which is why it works. If you change the backend address, change compose and `docker compose up -d --force-recreate frontend`; no rebuild needed.
+> **`BACKEND_URL` must be set at runtime, in `docker-compose.yml` (frontend `environment:`), NOT baked into the image.** The frontend `Dockerfile` deliberately has no `ARG`/`ENV` for it (a build-stage value never reaches the runtime stage) — if it is unset at runtime the rewrite silently falls back to `localhost:8000` (nothing there) and the whole `/api` proxy breaks. Compose sets it explicitly, which is why it works. If you change the backend address, change compose and `docker compose up -d --force-recreate frontend`; no rebuild needed.
 
-**Persistence via bind-mounts** (visible on the host): `./backend/downloads` (galleries/stories), `./backend/sessions` (`session_<user>.json`), plus the `pgdata` named volume for Postgres. Paths inside the container come from env: `DOWNLOADS_DIR=/data/downloads`, `SESSIONS_DIR=/data/sessions`.
+**Persistence via bind-mounts** (visible on the host): `./data` → `/data` (gitignored): `data/db/app.db` (SQLite), `data/downloads` (galleries/stories), `data/sessions` (`session_<user>.json`). Paths inside the container come from env: `DOWNLOADS_DIR=/data/downloads`, `SESSIONS_DIR=/data/sessions`.
 
 > **`.env` is NOT mounted into the containers.** Its values are injected by compose interpolation at *container-create* time, and `config.py` reads them once at import. So editing `.env` has **zero effect** until you recreate: `docker compose up -d --force-recreate <service>`. A plain `docker restart` is not enough.
 
 ### Web app — local dev without Docker (hot reload)
 ```bash
-docker compose up -d db              # just Postgres
-cd backend
-pip install -r requirements.txt      # uses the venv; NOT needed in the Docker path
-alembic upgrade head                 # create/upgrade tables (re-run after model changes)
-uvicorn main:app --reload            # reads DATABASE_URL from .env (localhost:11)
+pip install -r backend/requirements.txt   # uses the venv; NOT needed in the Docker path
+export PYTHONPATH=$PWD/core DATABASE_URL=sqlite:///$PWD/data/app.db   # fish: set -x
+cd backend && uvicorn main:app --reload   # tables are created on startup
 
-cd frontend && npm install && npm run dev   # Next.js dev server on :5174 with Turbopack
+cd docker/web/frontend && npm install && npm run dev   # Next.js dev server on :5174 with Turbopack
 ```
-Postgres is **optional at runtime**: if it's unreachable, the stream endpoint degrades to no-cache/no-history instead of failing. The CLI (`main.py`) does not use the DB at all. Outside Docker, `npm run dev` uses the port in `package.json` (5174) and the rewrite falls back to `http://localhost:8000`, so it needs a `BACKEND_URL` export only if your backend is not on 8000.
+The DB is **optional at runtime** (config.py's default `DATABASE_URL` is still Postgres on localhost:11, so set it to sqlite as above): if it's unreachable, the stream endpoint degrades to no-cache/no-history instead of failing. The CLI (`main.py`) does not use the DB at all. Outside Docker, `npm run dev` uses the port in `package.json` (5174) and the rewrite falls back to `http://localhost:8000`, so it needs a `BACKEND_URL` export only if your backend is not on 8000.
 
 > **Warning**: `uvicorn --reload` restarts the server on every file save, which **wipes all in-memory sessions** — you must re-login after each backend file edit.
 
@@ -90,14 +87,15 @@ Four functions chained in `main()`:
 ### Data layer (`backend/`, SQLAlchemy 2.0 **sync** + psycopg3 + Alembic)
 Sync (not async) on purpose: the instagrapi fetch is blocking and runs in a `ThreadPoolExecutor`, so a sync `Session` fits without thread↔event-loop bridging; FastAPI runs `def` endpoints in its own threadpool.
 - `config.py` — `settings` from env/`.env` (`DATABASE_URL`, `METRICS_TTL_DAYS`, `GALLERY_TTL_HOURS`, `ECHO_SQL`, `DOWNLOADS_DIR`, `SESSIONS_DIR`). On import it `mkdir`s `DOWNLOADS_DIR`/`SESSIONS_DIR` so they exist before use. **`METRICS_TTL_DAYS` defaults to 180** and governs *only the counters* — there is no TTL on the cached row itself.
-- `database.py` — `engine`, `SessionLocal`, `session_scope()` context manager. That is the only way to get a session; there is no `Depends`-based dependency helper.
+- `database.py` — `engine`, `SessionLocal`, `session_scope()` context manager, and `init_db()` (`create_all`, called on app startup; replaces Alembic). For `sqlite:` URLs it creates the parent dir and sets `check_same_thread=False`. That is the only way to get a session; there is no `Depends`-based dependency helper.
 - `models.py` — `InstagramUser` (profile cache), `AnalysisRun` (one snapshot/run), `RunMember` (a **self-contained snapshot** of a profile as it was at analysis time).
   - `RunMember` has **no FK to `instagram_users`** — `user_pk` is a plain indexed `BigInteger` used only to correlate with the cache. It carries `username`/`full_name`/`is_verified`/`is_private` plus the frozen counters, so nothing about a past run depends on the cache. This was deliberate: the old FK was `ON DELETE CASCADE` (purging the cache silently erased history) and reading `username` through the relationship returned *today's* value for a run from months ago — the same lie as reading the counters live. `RunMember.run_id` still has a real CASCADE FK to `analysis_runs`. There is no `InstagramUser.memberships` relationship anymore; `search_users` joins `run_members` with an explicit `ON user_pk = instagram_users.pk` instead.
 - `repository.py` — all SQL lives here: `get_cached_user` / `upsert_user` / `user_to_dict` / `search_users`, and the history half (`create_run` / `add_member` / `finalize_run` / `list_runs` / `get_run` / `run_owner` / `run_to_dict` / `member_to_dict` / `diff_runs`).
   - **`create_run` always creates — it must never reuse a run.** `diff_runs` requires both runs to share `modo` + `target_username`, so if a second analysis of the same target reused the first run there would never be a comparable pair and the diff would be permanently empty. That reuse logic, its `_find_existing_run` helper, and `reset_run_members` (which existed only to clear a reused run) were all removed — and that reuse is provably what corrupted run 24: it kept `total=125` with only 12 `run_members`, because the reuse wiped the members of the *previous* run and only a few were re-added. Runs 1-8 and 28 also have `total=0` with members present, from before `finalize_run` was being called. Both are legacy fossils; new runs are consistent.
   - `add_member` copies identity + badges + counters off the `InstagramUser` row into the snapshot; `member_to_dict` and `_run_usernames` read **only** from `RunMember`. If you add a field to the history UI, snapshot it — do not join back to the profile.
   - `search_users` has no time filter, and `/api/downloads/pending` calls it with `limit=10_000` — that endpoint crosses the whole table against the download directory on every request. Measured at ~70ms with 1287 cached profiles, and the SQL part is only 0.35ms: the cost is the ~3 filesystem calls per user (`exists()` + `iterdir()`), not the query. It scales linearly with the cache, so it is fine now and would need pagination or a cached listing somewhere around 10k+ profiles.
-- `alembic/` — migrations. `alembic/env.py` pulls `Base.metadata` and `settings.DATABASE_URL` (the `.ini` URL is overridden in code). After editing `models.py`: `alembic revision --autogenerate -m "..."` then `alembic upgrade head`.
+- **No migrations anymore** (`alembic/` was removed in the `core/` restructure; `backend/alembic.ini` is a leftover). `create_all` only creates missing tables — it never alters existing ones, so a model change needs a manual migration or deleting `data/db/app.db`.
+- **Known gap**: `core/grapi_core/repository.py` still calls `pg_insert` (never imported after the restructure) and uses `on_conflict_do_update(constraint=...)`, which is Postgres-only — `upsert_user`/`add_member` fail until ported to a dialect-neutral upsert.
 - `main.py` — FastAPI app with all API endpoints. Key groups: auth (`/api/login`, `/api/logout`, `/api/sessions`, `/api/session`), analysis stream (`/api/seguidores/stream`), posts/media proxy (`/api/posts`, `/api/download`, `/api/proxy-image`), single-user download SSE (`/api/download-user`, `/api/download-user/stream`), bulk download jobs (`/api/download-all`, `/api/download-all/stream`, `/api/download-all/status`, `/api/download-all/cancel`, `/api/download-jobs`), downloads browser (`/api/downloads`, `/api/downloads/pending`, `/api/downloads/<username>`, `/api/downloads/<username>/files/<filename:path>`), history (`/api/history/runs`, `/api/history/runs/<id>`, `/api/history/diff`, `/api/history/users`).
   - **History endpoints take `session_id`, not a username.** `_history_owner()` resolves it to `sessions[session_id].username` and 401s if the session is gone; `_assert_run_owner()` 404s when a run belongs to another account, so runs never leak across accounts. `HistoryCard` already spoke this exact contract — the endpoints were simply missing, and the card had been 404ing.
 
@@ -107,7 +105,7 @@ Sync (not async) on purpose: the instagrapi fetch is blocking and runs in a `Thr
 
 **Progress streaming**: the blocking instagrapi fetch runs in a `ThreadPoolExecutor` (max 4 workers); progress events cross back to the async loop via `loop.call_soon_threadsafe(queue.put_nowait, event)`. Actual emitted event types from `obtener_usuarios` are `total`, `usuario`, `error`, `done`, plus `connected` (from `main.py` before the fetch) and `fatal_error` on an unhandled exception.
 
-### Web app — frontend (`frontend/`)
+### Web app — frontend (`docker/web/frontend/`)
 Next.js 15 SPA (App Router, Turbopack, `"use client"`), TypeScript, styled with **Tailwind CSS v4** (via `@tailwindcss/postcss`). The active code:
 - `app/layout.tsx` — root layout (`<html lang="es">`, imports `globals.css`).
 - `app/page.tsx` — main SPA page (`"use client"`), a single component with `view` state toggling three screens: `downloads`, `search`, `history`. Owns per-user download stream logic, login/logout, CSV export, tab navigation, and session switcher.
@@ -123,7 +121,7 @@ Next.js 15 SPA (App Router, Turbopack, `"use client"`), TypeScript, styled with 
 
 Frontend features: choose following vs followers, analyze your own or another `target_username`, live progress bar, client-side filters, sortable table, CSV export, session switcher (multi-account), and per-user gallery/stories download with progress. Bulk download is app-level state via `useBulkDownload` (the active `job_id` is kept in `localStorage`; `resume()` re-subscribes to an in-flight job after reload). Consumes the stream with `fetch`+reader (not `EventSource`) for manual reconnect control.
 
-- `frontend/src/` — **dead code, do not edit**: leftover `src/` directory from the Vue era. (`frontend/lib/` is live; don't confuse the two.)
+- `docker/web/frontend/src/` — **dead code, do not edit**: leftover `src/` directory from the Vue era. (`lib/` is live; don't confuse the two.)
 
 ## Design System & UI Principles
 
