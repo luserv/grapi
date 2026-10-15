@@ -12,6 +12,7 @@ backend/downloads/
 *.csv
 # ...but dependency lists are source, not results.
 !requirements.txt
+!requirements-*.txt
 
 # ── Python ────────────────────────────────────────────────────────────
 __pycache__/

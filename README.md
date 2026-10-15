@@ -66,17 +66,17 @@ Las tablas se crean solas al arrancar. La base es **opcional**: si no está disp
 
 > ⚠️ `uvicorn --reload` reinicia el proceso en cada guardado del backend, lo que **borra las sesiones en memoria**. Tenés que volver a iniciar sesión después de cada cambio.
 
-### Opción C — App de escritorio (AppImage, Linux)
+### Opción C — App de escritorio (AppImage en Linux, NSIS en Windows)
 
 Un solo ejecutable: ventana de Tauri + backend FastAPI empaquetado con PyInstaller (sidecar) + frontend estático.
 
-**Requisitos:** Rust y `cargo-tauri` v2, Node 20+, un venv `env/` con las dependencias del backend y `pyinstaller`.
+**Requisitos:** Rust y `cargo-tauri` v2, Node 20+, un venv `env/` con `backend/requirements.txt` y `backend/requirements-build.txt` (PyInstaller). `scripts/build_sidecar.py` usa ese venv automáticamente si existe.
 
 ```bash
 NO_STRIP=true cargo tauri build --bundles appimage
 ```
 
-`NO_STRIP=true` hace falta en Arch (el `strip` de linuxdeploy falla). El build reconstruye el sidecar (`build-sidecar.sh`, ~50 s) y el frontend (`app/`) cada vez. Resultado:
+`NO_STRIP=true` hace falta en Arch (el `strip` de linuxdeploy falla). El build reconstruye el sidecar (`scripts/build_sidecar.py`, ~50 s) y el frontend (`app/`) cada vez. Resultado:
 
 ```
 src-tauri/target/release/bundle/appimage/grapi_0.1.0_amd64.AppImage
@@ -91,6 +91,20 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./src-tauri/target/release/bundle/appimage/grapi_0.1.
 - **Datos** en `~/.local/share/dev.grapi.desktop/`: `sessions/`, `downloads/` y `settings.json`.
 - **Carpeta de descargas configurable**: en la pestaña *Descargas* se ve la ruta actual y el botón **Cambiar carpeta** abre un selector nativo. Se guarda en `settings.json` y rige para las descargas nuevas; **lo ya descargado no se mueve**. No se puede cambiar mientras corre una descarga masiva.
 - Para desarrollar el frontend de escritorio: `cd app && npm install && npm run build` (genera `app/out`). La URL de la API sale de `NEXT_PUBLIC_API_BASE` (default `http://127.0.0.1:8765`).
+
+### Releases (GitHub Actions)
+
+`.github/workflows/release.yml` compila la app de escritorio en `ubuntu-22.04` (AppImage) y `windows-latest` (instalador NSIS `.exe`, por usuario, sin admin) y deja los binarios como artefactos del run (`grapi-linux-appimage`, `grapi-windows-nsis`). Se dispara con tags `v*` o a mano (*Run workflow*).
+
+Para publicar una versión:
+
+1. Subí `version` en `src-tauri/tauri.conf.json` (fuente de verdad; mantené `src-tauri/Cargo.toml` igual) y commiteá.
+2. `git tag vX.Y.Z && git push origin vX.Y.Z`. El workflow falla si el tag no coincide con la versión del `tauri.conf.json`.
+3. Cuando terminen los dos builds, aparece un **release en borrador** en *Releases* con ambos instaladores adjuntos. Revisalo y publicalo.
+
+Un run manual (`workflow_dispatch`) solo sube los artefactos al run; no crea release.
+
+> ⚠️ El build de Windows y el workflow en los runners de GitHub **no se pudieron verificar en local** (solo se probó el AppImage en Linux). Esperá que el primer run necesite ajustes. Los instaladores no están firmados: Windows SmartScreen va a advertir.
 
 ---
 

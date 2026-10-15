@@ -12,12 +12,38 @@ import uvicorn
 from main import app
 
 
+def _parent_alive_windows(parent: int):
+    """Returns a callable that is True while process `parent` is still running.
+
+    On Windows os.getppid() never changes after the parent dies (PIDs are not
+    re-parented), so the POSIX check below would never fire. Instead we hold a
+    SYNCHRONIZE handle on the parent and poll it.
+    """
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    handle = kernel32.OpenProcess(0x00100000, 0, parent)  # SYNCHRONIZE
+    if not handle:
+        return lambda: False  # parent is already gone
+
+    # WAIT_TIMEOUT (0x102) means the process is still running.
+    return lambda: kernel32.WaitForSingleObject(handle, 0) == 0x102
+
+
 def _exit_when_orphaned() -> None:
     """The onefile bootloader is our parent; if it is killed, exit too."""
     parent = os.getppid()
+    if os.name == "nt":
+        alive = _parent_alive_windows(parent)
+    else:
+        def alive() -> bool:
+            return os.getppid() == parent
     while True:
         time.sleep(1)
-        if os.getppid() != parent:
+        if not alive():
             os._exit(0)
 
 
