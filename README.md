@@ -2,6 +2,8 @@
 
 Analizador de seguidores/seguidos de Instagram con descarga de galerías e historias.
 
+**Landing**: https://luserv.github.io/grapi/ (carpeta `web/`). Se despliega con `.github/workflows/pages.yml`; para que funcione hay que activar Pages en los ajustes del repo con *Source = GitHub Actions* (paso manual).
+
 **Stack**: FastAPI + SQLite (Postgres opcional) · Next.js 15 · instagrapi · Tauri 2 (app de escritorio)
 
 ## Estructura del repo

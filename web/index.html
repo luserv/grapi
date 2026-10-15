@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grapi</title>
+<meta name="description" content="Analiza a quién sigues y quién te sigue en Instagram, con historial y descarga de galerías e historias. App de escritorio para Linux y Windows que corre en tu máquina.">
+<meta name="theme-color" content="#1c2128">
+<meta property="og:type" content="website">
+<meta property="og:title" content="grapi">
+<meta property="og:description" content="Analizador de seguidores y seguidos de Instagram con descarga local de galerías e historias. Linux y Windows.">
+<meta property="og:url" content="https://luserv.github.io/grapi/">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Fira+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Saltar al contenido</a>
+<header class="top">
+  <div class="wrap top-in">
+    <a class="mark" href="#" aria-label="grapi, inicio"><span class="chev" aria-hidden="true">›</span> grapi</a>
+    <nav aria-label="Principal">
+      <a href="#descargas">Descargas</a>
+      <a href="#uso">Cómo se usa</a>
+      <a href="https://github.com/luserv/grapi">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+<section class="hero wrap" id="descargas" aria-labelledby="h-hero">
+  <h1 id="h-hero">Analiza a quién sigues en Instagram, con historial y descargas locales, desde una app que corre en tu máquina.</h1>
+  <p class="lead">Lista seguidores y seguidos de tu cuenta o de otra, filtra y ordena al instante, compara corridas y baja galerías e historias a una carpeta tuya. Sin servidor ajeno: los datos quedan en tu disco.</p>
+
+  <div class="dl" id="dl" data-state="idle">
+    <div class="dl-item" data-os="linux">
+      <a class="btn" id="dl-linux" href="https://github.com/luserv/grapi/releases/latest">Descargar para Linux</a>
+      <p class="meta" id="meta-linux">AppImage x86_64 · ver la última versión en GitHub</p>
+    </div>
+    <div class="dl-item" data-os="windows">
+      <a class="btn" id="dl-windows" href="https://github.com/luserv/grapi/releases/latest">Descargar para Windows</a>
+      <p class="meta" id="meta-windows">Instalador .exe · ver la última versión en GitHub</p>
+    </div>
+  </div>
+  <p class="dl-foot" id="dl-foot" role="status"><a href="https://github.com/luserv/grapi/releases">Ver todas las versiones</a></p>
+</section>
+
+<section class="wrap preview" aria-labelledby="h-prev">
+  <h2 id="h-prev" class="sr">Vista previa de la tabla de resultados</h2>
+  <figure>
+    <div class="app" aria-hidden="true">
+      <div class="app-bar">
+        <span class="app-title"><span class="chev">›</span> grapi</span>
+        <span class="app-tab on">Siguiendo</span><span class="app-tab hide-s">Seguidores</span><span class="app-tab hide-s">Historial</span><span class="app-tab hide-s">Descargas</span>
+      </div>
+      <div class="prog">
+        <div class="prog-line"><span>Analizando siguiendo de @ejemplo_cuenta</span><span class="mono">312 / 480</span></div>
+        <div class="bar"><i style="width:65%"></i></div>
+      </div>
+      <div class="chips">
+        <span class="chip on">Todos</span><span class="chip">Públicos</span><span class="chip">Verificados</span><span class="chip hide-s">Más de 1000 seguidores</span>
+        <span class="field mono">buscar…</span>
+      </div>
+      <table>
+        <thead><tr><th>Usuario</th><th class="c-name">Nombre</th><th class="num sort">Seguidores ↓</th><th class="num c-sig">Siguiendo</th><th class="num c-posts">Posts</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">@ejemplo_01 <b class="bd v">verificado</b></td><td class="c-name">Estudio Ejemplo</td><td class="num">1 284 300</td><td class="num c-sig">412</td><td class="num c-posts">2 031</td></tr>
+          <tr><td class="mono">@ejemplo_02</td><td class="c-name">Marta Ejemplo</td><td class="num">86 540</td><td class="num c-sig">1 120</td><td class="num c-posts">874</td></tr>
+          <tr><td class="mono">@ejemplo_03 <b class="bd p">privado</b></td><td class="c-name">Nombre de muestra</td><td class="num">12 905</td><td class="num c-sig">690</td><td class="num c-posts">310</td></tr>
+          <tr><td class="mono">@ejemplo_04</td><td class="c-name">Café Ejemplo</td><td class="num">4 877</td><td class="num c-sig">233</td><td class="num c-posts">1 502</td></tr>
+          <tr><td class="mono">@ejemplo_05 <b class="bd v">verificado</b></td><td class="c-name">Banda de Muestra</td><td class="num">3 120</td><td class="num c-sig">97</td><td class="num c-posts">188</td></tr>
+          <tr><td class="mono">@ejemplo_06 <b class="bd p">privado</b></td><td class="c-name">Sin nombre</td><td class="num">1 044</td><td class="num c-sig">2 310</td><td class="num c-posts">62</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <figcaption>Datos de muestra, cuentas ficticias. Es una recreación en HTML de la vista de resultados, no una captura.</figcaption>
+  </figure>
+</section>
+
+<section class="wrap" aria-labelledby="h-hace">
+  <h2 id="h-hace">Qué hace</h2>
+  <dl class="spec">
+    <div><dt>Varias cuentas</dt><dd>Mantiene sesiones guardadas y cambias entre cuentas desde la barra, sin volver a iniciar sesión.</dd></div>
+    <div><dt>Seguidos y seguidores</dt><dd>De tu cuenta o de otra. Trae la lista completa y la ordena por cantidad de seguidores.</dd></div>
+    <div><dt>Caché e historial</dt><dd>Cada análisis queda guardado. Compara dos corridas y ve quién te dejó de seguir o empezó a seguirte.</dd></div>
+    <div><dt>Filtros en vivo</dt><dd>Públicos, privados, verificados, mínimo de seguidores y texto. Todo en el cliente, sin esperar a Instagram.</dd></div>
+    <div><dt>Galerías e historias</dt><dd>Descarga de un usuario o en lote, con espera de 24 h por perfil y cancelación en cualquier momento.</dd></div>
+    <div><dt>Exportar y carpeta</dt><dd>Exporta la tabla a CSV. La carpeta de descargas se cambia desde la pestaña Descargas.</dd></div>
+  </dl>
+</section>
+
+<section class="wrap" id="uso" aria-labelledby="h-uso">
+  <h2 id="h-uso">Instalar</h2>
+  <div class="cols">
+    <div>
+      <h3>Linux</h3>
+      <pre><code>chmod +x grapi_*_amd64.AppImage
+./grapi_*_amd64.AppImage</code></pre>
+      <p>Si no arranca, instala <code>libfuse2</code> o lánzalo con <code>APPIMAGE_EXTRACT_AND_RUN=1</code>.</p>
+      <p>Datos en <code>~/.local/share/dev.grapi.desktop/</code>.</p>
+    </div>
+    <div>
+      <h3>Windows</h3>
+      <p>Ejecuta el instalador <code>grapi_*_x64-setup.exe</code>.</p>
+      <p>El instalador no está firmado, así que SmartScreen puede avisar. Elige <b>Más información</b> y después <b>Ejecutar de todas formas</b>.</p>
+      <p>La carpeta de descargas se cambia desde la pestaña Descargas de la app.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap" aria-labelledby="h-antes">
+  <h2 id="h-antes">Antes de usarlo</h2>
+  <div class="note">
+    <p>grapi usa la API privada y no oficial de Instagram a través de instagrapi. Pueden aparecer límites de tasa o verificaciones en la cuenta. Por eso la app espera entre peticiones a propósito: no la acortes.</p>
+    <p>No está afiliado a Instagram ni a Meta. Usa tu propia cuenta, bajo tu responsabilidad.</p>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <p>Licencia MIT · <a href="https://github.com/luserv/grapi">github.com/luserv/grapi</a></p>
+    <p id="src">Versiones: GitHub Releases (API pública)</p>
+  </div>
+</footer>
+<script src="app.js" defer></script>
+</body>
+</html>
