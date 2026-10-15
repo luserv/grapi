@@ -56,7 +56,7 @@ Thumbs.db
 *.swo
 
 
-./.claude/
+.claude/
 
 # ── Índices de herramientas ─────────────────────────────────────────
 .codegraph/
@@ -72,3 +72,8 @@ build/
 dist/
 src-tauri/binaries/grapi-api-*
 *.tsbuildinfo
+
+# ── Archivos de herramientas de IA (solo locales) ───────────────────
+odd/
+CLAUDE.md
+PRODUCT.md
